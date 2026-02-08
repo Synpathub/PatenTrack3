@@ -29,7 +29,7 @@ The PT-API is a Node.js/Express application providing REST APIs for patent manag
 
 - **Business Routes** (9 files): Authentication, admin operations, user management
 - **Application Routes** (15 files): Patent data, transactions, family, events, dashboards
-- **Client Routes** (16 files): Customer management, documents, integrations (Slack/Microsoft)
+- **Client Routes** (18 files): Customer management, documents, integrations (Slack/Microsoft)
 
 ### Key Technologies
 - **Runtime:** Node.js + Express.js 4.x
