@@ -25,7 +25,7 @@
 
 ## 1. Executive Summary
 
-The PT-API is a Node.js/Express application providing REST APIs for patent management, with **390+ endpoints** across three main domains:
+The PT-API is a Node.js/Express application providing REST APIs for patent management, with **388 endpoints** across three main domains:
 
 - **Business Routes** (9 files): Authentication, admin operations, user management
 - **Application Routes** (15 files): Patent data, transactions, family, events, dashboards
@@ -736,7 +736,7 @@ This comprehensive inventory documents all REST API endpoints across the three m
 
 ## 4. PHP Script Execution Bridge
 
-### 3.1 Script Execution Method
+### 4.1 Script Execution Method
 
 **Helper:** `helpers/runPhpScript.js`
 
@@ -752,7 +752,7 @@ function runPhpScript(scriptPath, args = [], waitForResult = false) {
 }
 ```
 
-### 3.2 All PHP Scripts with Callers
+### 4.2 All PHP Scripts with Callers
 
 | Script | Route | HTTP Method | Args | Wait? |
 |--------|-------|-------------|------|-------|
@@ -769,7 +769,7 @@ function runPhpScript(scriptPath, args = [], waitForResult = false) {
 
 **⚠️ Security Risk:** Arguments passed via shell without proper escaping
 
-### 3.3 Node Script Executions
+### 4.3 Node Script Executions
 
 | Script | Execution | Route | Security Note |
 |--------|-----------|-------|---------------|
@@ -782,7 +782,7 @@ function runPhpScript(scriptPath, args = [], waitForResult = false) {
 
 ## 5. External Service Integrations
 
-### 4.1 Slack API
+### 5.1 Slack API
 
 **Package:** `@slack/web-api` v6.x  
 **Helper:** `helpers/slack.js`
@@ -801,7 +801,7 @@ const web = new WebClient(process.env.SLACK_ADMIN_TOKEN);
 
 **Routes:** `/slacks/*` (13 endpoints)
 
-### 4.2 Microsoft Graph API
+### 5.2 Microsoft Graph API
 
 **Package:** `@microsoft/microsoft-graph-client`  
 **Middleware:** `helpers/microsoftMiddelware.js`
@@ -818,7 +818,7 @@ const web = new WebClient(process.env.SLACK_ADMIN_TOKEN);
 
 **Routes:** `/microsoft/*` (12 endpoints)
 
-### 4.3 Google APIs
+### 5.3 Google APIs
 
 **Google Drive:**
 - OAuth2 authentication
@@ -835,7 +835,7 @@ const web = new WebClient(process.env.SLACK_ADMIN_TOKEN);
 - `/documents/layout`
 - `/assets/external_assets/sheets`
 
-### 4.4 USPTO APIs
+### 5.4 USPTO APIs
 
 **PTAB API:**
 - Endpoint: `GET /ptab/:asset`
@@ -847,7 +847,7 @@ const web = new WebClient(process.env.SLACK_ADMIN_TOKEN);
 - Public API
 - Returns citation data
 
-### 4.5 EPO (European Patent Office)
+### 5.5 EPO (European Patent Office)
 
 **Helper:** `helpers/epo.js`
 
@@ -861,7 +861,7 @@ const web = new WebClient(process.env.SLACK_ADMIN_TOKEN);
 - `/family/epo/grant/:grantDocNumber`
 - `/family/single/file/`
 
-### 4.6 AWS S3
+### 5.6 AWS S3
 
 **Package:** `aws-sdk`  
 **Helper:** `helpers/uploadHelper.js`
@@ -889,7 +889,7 @@ AWS.S3({
 - Activity files
 - Comment attachments
 
-### 4.7 Sentry Error Tracking
+### 5.7 Sentry Error Tracking
 
 **Package:** `@sentry/node` v10.x  
 **Config:** `helpers/instrument.js`
@@ -911,7 +911,7 @@ Sentry.init({
 
 ## 6. Database Access Patterns
 
-### 5.1 Multi-Tenant Architecture
+### 6.1 Multi-Tenant Architecture
 
 **Shared Databases:**
 - `db_business`: Users, organizations, roles (authentication)
@@ -929,7 +929,7 @@ Sentry.init({
 Request → JWT → req.orgId → getOrgConnection() → Sequelize instance → req.connection_db
 ```
 
-### 5.2 Key Tables
+### 6.2 Key Tables
 
 **db_business:**
 - users (authentication)
@@ -964,7 +964,7 @@ Request → JWT → req.orgId → getOrgConnection() → Sequelize instance → 
 
 ## 7. Security Analysis
 
-### 6.1 Authentication Flow
+### 7.1 Authentication Flow
 
 **Standard Login:**
 1. POST /signin with username/password
@@ -980,7 +980,7 @@ Request → JWT → req.orgId → getOrgConnection() → Sequelize instance → 
 4. Create JWT token (bypasses password)
 5. Log IP in share_link_details
 
-### 6.2 Authorization Model
+### 7.2 Authorization Model
 
 **Role-Based Access Control (RBAC):**
 - Roles stored in `db_business.roles` table
@@ -1004,7 +1004,7 @@ Request → JWT → req.orgId → getOrgConnection() → Sequelize instance → 
 // No authentication required
 ```
 
-### 6.3 Critical Security Issues
+### 7.3 Critical Security Issues
 
 | Issue | Severity | Location | Exploit |
 |-------|----------|----------|---------|
@@ -1016,7 +1016,7 @@ Request → JWT → req.orgId → getOrgConnection() → Sequelize instance → 
 | **Share Links Never Expire** | 🟡 MEDIUM | share.js | Permanent access if leaked |
 | **Hardcoded Secret Fallback** | 🟡 MEDIUM | verifyJwtToken.js:5 | 'p@nt3nt8@60' |
 
-### 6.4 SQL Injection Risk Assessment
+### 7.4 SQL Injection Risk Assessment
 
 **Generally Safe:**
 ✅ Sequelize ORM with parameterized queries  
@@ -1035,7 +1035,7 @@ await sequelize.query(`
 `, { replacements: { names: ['A', 'B'] } });
 ```
 
-### 6.5 File Upload Security
+### 7.5 File Upload Security
 
 **Validation:**
 ```javascript
@@ -1094,13 +1094,13 @@ io.on("connection", (socket) => {
 
 ## 9. Logging & Monitoring
 
-### 8.1 Request Logger
+### 9.1 Request Logger
 
 **File:** helpers/requestLogger.js
 
 Logs all HTTP requests (method, path, IP, timestamp).
 
-### 8.2 Error Logger
+### 9.2 Error Logger
 
 **File:** helpers/logErrors.js
 
@@ -1111,7 +1111,7 @@ function logErrorToFile(error) {
 }
 ```
 
-### 8.3 Console.log Override
+### 9.3 Console.log Override
 
 **File:** app.js:4-22
 
@@ -1200,7 +1200,7 @@ STATIC_FILES_URL=https://static.patentrack.com/
 
 ## Summary Statistics
 
-**Total Endpoints:** 390+  
+**Total Endpoints:** 388  
 **Route Files:** 40  
 **Lines of Code:** ~37,000 (routes only)  
 **PHP Scripts:** 17  
