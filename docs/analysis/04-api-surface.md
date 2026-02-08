@@ -2,7 +2,7 @@
 
 **Repository:** /tmp/PT-API  
 **Analysis Date:** December 2024  
-**Total Route Files:** 40  
+**Total Route Files:** 42  
 **Total Lines of Code:** ~37,000 (routes only)
 
 ---
@@ -1201,7 +1201,7 @@ STATIC_FILES_URL=https://static.patentrack.com/
 ## Summary Statistics
 
 **Total Endpoints:** 388  
-**Route Files:** 40  
+**Route Files:** 42  
 **Lines of Code:** ~37,000 (routes only)  
 **PHP Scripts:** 17  
 **Node Scripts:** 5  
