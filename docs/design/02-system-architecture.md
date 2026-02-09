@@ -3,9 +3,9 @@
 **Stage B — Architecture Design**  
 **Version:** 1.0  
 **Date:** 2026-02-09  
-**Status:** Draft — Part A (Sections 1–4)
+**Status:** Draft — Parts A & B (Sections 1–4, 7–8)
 
-> **⚠️ Part A Only** — This document covers Sections 1 through 4. Sections 5–9 (Caching Strategy, API Design, Frontend Architecture, Deployment & Infrastructure, Testing Strategy) will be added in a follow-up session (Part B).
+> **Note:** This document currently covers Sections 1 through 4 (Part A) and Sections 7–8 (Part B — API Design Principles & Deployment Infrastructure). Sections 5, 6, and 9 (Caching Strategy, Frontend Architecture, Testing Strategy) will be added in follow-up sessions.
 
 ---
 
@@ -15,11 +15,11 @@
 2. [Data Flow Redesign](#2-data-flow-redesign)
 3. [Authentication & Authorization Architecture](#3-authentication--authorization-architecture)
 4. [Ingestion Pipeline Architecture](#4-ingestion-pipeline-architecture)
-5. _(Part B)_ Caching & Performance Strategy
-6. _(Part B)_ API Design
-7. _(Part B)_ Frontend Architecture
-8. _(Part B)_ Deployment & Infrastructure
-9. _(Part B)_ Testing Strategy
+5. _(Future)_ Caching & Performance Strategy
+6. _(Future)_ Frontend Architecture
+7. [API Design Principles](#7-api-design-principles)
+8. [Deployment & Infrastructure](#8-deployment--infrastructure)
+9. _(Future)_ Testing Strategy
 
 ---
 
@@ -1176,13 +1176,1097 @@ process.on('SIGTERM', async () => {
 
 ---
 
+## 7. API Design Principles
+
+> **Context:** Section 1.3 established that PatenTrack3 uses Next.js API routes as a BFF (Backend for Frontend) with ~80 consolidated endpoints. This section defines the conventions and principles that govern all API endpoints.
+
+### 7.1 Protocol Decision: REST with OpenAPI
+
+**Decision:** REST with OpenAPI 3.1, auto-generated from Zod schemas.
+
+**Rationale:**
+
+| Criterion | tRPC | REST + OpenAPI |
+|-----------|------|----------------|
+| Type safety (client ↔ server) | ✅ Excellent — end-to-end inference | ✅ Good — generated from Zod schemas via `zod-openapi` |
+| Developer experience with Next.js | ✅ Great DX with `@trpc/next` | ✅ Native — Next.js API routes are REST by default |
+| Share Viewer (public-facing) | ⚠️ Requires separate REST adapter | ✅ Standard HTTP — any client can consume |
+| Future third-party integrations | ⚠️ Non-standard, requires gateway | ✅ Industry standard, self-documenting |
+| API documentation | ⚠️ Manual or custom tooling | ✅ Auto-generated Swagger/Redoc |
+| Caching (CDN, browser, proxy) | ⚠️ POST-only, custom cache headers | ✅ Native HTTP caching semantics (GET, ETag) |
+| Tooling ecosystem (Postman, curl, etc.) | ⚠️ Limited | ✅ Universal |
+| Learning curve for new developers | ⚠️ tRPC-specific patterns | ✅ REST is universally understood |
+
+**Key factors in the decision:**
+
+1. **Share Viewer is public-facing:** The share viewer (replacing PT-Share) serves public URLs that must work without authentication and be indexable/cacheable. REST's standard HTTP semantics (GET requests, cache headers, CDN support) are ideal for this. tRPC's POST-based RPC calls would require a separate REST adapter for public endpoints.
+
+2. **Future extensibility:** While PatenTrack3 is currently internal, the architecture should not preclude future third-party API access. REST + OpenAPI provides a self-documenting, standards-based API that any client can consume.
+
+3. **Type safety is preserved:** By generating OpenAPI schemas from Zod (via `zod-openapi` or `@asteasolutions/zod-to-openapi`), we maintain type safety between the API and frontend. The shared Zod schemas in `packages/shared` serve as the single source of truth for both runtime validation and type generation.
+
+4. **Next.js alignment:** Next.js App Router API routes are inherently REST-based. Using REST avoids adding tRPC as an additional abstraction layer.
+
+### 7.2 URL Structure & Resource Organization
+
+**Base path:** `/api/v1/{resource}/{id?}/{sub-resource?}`
+
+**Resource routers organized by domain:**
+
+```
+apps/web/app/api/v1/
+├── assets/                    # Asset CRUD, search, bulk operations
+│   ├── route.ts               # GET (list), POST (create)
+│   └── [id]/
+│       ├── route.ts           # GET, PATCH, DELETE
+│       ├── assignments/       # Asset's assignment history
+│       └── events/            # Asset's events
+├── dashboards/                # Dashboard data aggregation
+│   ├── route.ts               # GET (summary data)
+│   ├── charts/                # Chart-specific endpoints
+│   └── export/                # CSV/PDF export
+├── events/                    # Event tabs, maintenance fees
+│   ├── route.ts               # GET (list with filters)
+│   └── [id]/route.ts          # GET (detail)
+├── families/                  # EPO patent families
+│   ├── route.ts               # GET (list)
+│   └── [id]/route.ts          # GET (detail with members)
+├── companies/                 # Company management (was "organizations" in legacy)
+│   ├── route.ts               # GET (list), POST (create)
+│   └── [id]/
+│       ├── route.ts           # GET, PATCH, DELETE
+│       ├── collections/       # Company's collections
+│       └── pipeline/          # Trigger/status of org pipeline
+├── customers/                 # Tenant customer management (admin)
+│   ├── route.ts               # GET (list), POST (create)
+│   └── [id]/route.ts          # GET, PATCH, DELETE
+├── admin/                     # Super admin operations
+│   ├── tenants/               # Tenant CRUD
+│   ├── users/                 # User management across tenants
+│   ├── ingestion/             # Ingestion control, status, history
+│   └── system/                # Health, metrics, config
+├── share/                     # Share link management & public access
+│   ├── route.ts               # POST (create share link)
+│   ├── [code]/route.ts        # GET (public — resolve share link)
+│   └── [code]/data/route.ts   # GET (public — share data payload)
+├── ingestion/                 # Ingestion monitoring (admin)
+│   ├── status/                # Current ingestion status
+│   ├── history/               # Past ingestion runs
+│   └── trigger/               # Manual ingestion trigger
+└── auth/                      # Authentication (see Section 3)
+    ├── login/route.ts         # POST
+    ├── register/route.ts      # POST
+    ├── logout/route.ts        # POST
+    ├── refresh/route.ts       # POST
+    └── me/route.ts            # GET (current user)
+```
+
+**URL conventions:**
+
+| Pattern | Example | Description |
+|---------|---------|-------------|
+| Collection | `GET /api/v1/assets` | List resources (paginated) |
+| Single resource | `GET /api/v1/assets/:id` | Get resource by ID |
+| Create | `POST /api/v1/assets` | Create new resource |
+| Update | `PATCH /api/v1/assets/:id` | Partial update |
+| Delete | `DELETE /api/v1/assets/:id` | Soft delete (set `deleted_at`) |
+| Sub-resource | `GET /api/v1/assets/:id/assignments` | List related resources |
+| Action | `POST /api/v1/companies/:id/pipeline` | Trigger org pipeline |
+| Search | `GET /api/v1/assets?q=search&type=patent` | Query parameters for filtering |
+
+### 7.3 Error Format
+
+All API errors follow a consistent JSON structure:
+
+```json
+{
+  "error": {
+    "code": "FORBIDDEN",
+    "message": "You do not have permission to access this resource.",
+    "details": {
+      "required_role": "org_admin",
+      "current_role": "org_member"
+    }
+  }
+}
+```
+
+**Standard error codes:**
+
+| HTTP Status | Error Code | Usage |
+|------------|------------|-------|
+| 400 | `BAD_REQUEST` | Malformed request body or parameters |
+| 400 | `VALIDATION_ERROR` | Zod validation failure (details include field errors) |
+| 401 | `UNAUTHORIZED` | Missing or expired authentication |
+| 403 | `FORBIDDEN` | Authenticated but insufficient permissions |
+| 404 | `NOT_FOUND` | Resource does not exist or not visible to tenant |
+| 409 | `CONFLICT` | Duplicate resource or optimistic lock failure |
+| 422 | `UNPROCESSABLE_ENTITY` | Semantically invalid request |
+| 429 | `RATE_LIMITED` | Rate limit exceeded |
+| 500 | `INTERNAL_ERROR` | Unexpected server error (details omitted in production) |
+
+**Zod validation error example:**
+
+```json
+{
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "Request validation failed.",
+    "details": {
+      "fieldErrors": {
+        "email": ["Invalid email address"],
+        "name": ["Name must be at least 2 characters"]
+      }
+    }
+  }
+}
+```
+
+**Error handler implementation:**
+
+```typescript
+// packages/shared/src/errors.ts
+import { z } from 'zod';
+
+export const ApiErrorSchema = z.object({
+  error: z.object({
+    code: z.string(),
+    message: z.string(),
+    details: z.record(z.unknown()).optional(),
+  }),
+});
+
+export type ApiError = z.infer<typeof ApiErrorSchema>;
+
+export class AppError extends Error {
+  constructor(
+    public readonly code: string,
+    message: string,
+    public readonly statusCode: number = 500,
+    public readonly details?: Record<string, unknown>,
+  ) {
+    super(message);
+    this.name = 'AppError';
+  }
+
+  toJSON(): ApiError {
+    return {
+      error: {
+        code: this.code,
+        message: this.message,
+        ...(this.details && { details: this.details }),
+      },
+    };
+  }
+}
+
+// Predefined error factories
+export const Errors = {
+  badRequest: (message: string, details?: Record<string, unknown>) =>
+    new AppError('BAD_REQUEST', message, 400, details),
+  unauthorized: (message = 'Authentication required') =>
+    new AppError('UNAUTHORIZED', message, 401),
+  forbidden: (message = 'Insufficient permissions', details?: Record<string, unknown>) =>
+    new AppError('FORBIDDEN', message, 403, details),
+  notFound: (resource = 'Resource') =>
+    new AppError('NOT_FOUND', `${resource} not found`, 404),
+  conflict: (message: string) =>
+    new AppError('CONFLICT', message, 409),
+  rateLimited: (retryAfter: number) =>
+    new AppError('RATE_LIMITED', 'Rate limit exceeded', 429, { retryAfter }),
+  internal: (message = 'Internal server error') =>
+    new AppError('INTERNAL_ERROR', message, 500),
+} as const;
+```
+
+### 7.4 Pagination
+
+**Strategy:** Cursor-based pagination for all list endpoints. This is essential for the assignments table (50M+ rows) where offset-based pagination degrades at high page numbers.
+
+**Response format:**
+
+```json
+{
+  "data": [
+    { "id": "asset_123", "title": "US Patent 10,000,001", "..." : "..." },
+    { "id": "asset_124", "title": "US Patent 10,000,002", "..." : "..." }
+  ],
+  "cursor": {
+    "next": "eyJpZCI6ImFzc2V0XzEyNCJ9",
+    "hasMore": true
+  },
+  "total": 1847293
+}
+```
+
+**Query parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `limit` | number | 50 | Items per page (max 100) |
+| `cursor` | string | — | Opaque cursor from previous response |
+| `sort` | string | `created_at` | Sort field |
+| `order` | `asc` \| `desc` | `desc` | Sort direction |
+
+**Cursor implementation:**
+
+```typescript
+// packages/shared/src/pagination.ts
+import { z } from 'zod';
+
+export const PaginationQuerySchema = z.object({
+  limit: z.coerce.number().min(1).max(100).default(50),
+  cursor: z.string().optional(),
+  sort: z.string().default('created_at'),
+  order: z.enum(['asc', 'desc']).default('desc'),
+});
+
+export const PaginatedResponseSchema = <T extends z.ZodType>(itemSchema: T) =>
+  z.object({
+    data: z.array(itemSchema),
+    cursor: z.object({
+      next: z.string().nullable(),
+      hasMore: z.boolean(),
+    }),
+    total: z.number(),
+  });
+
+// Cursor encoding/decoding (base64 JSON)
+export function encodeCursor(values: Record<string, unknown>): string {
+  return Buffer.from(JSON.stringify(values)).toString('base64url');
+}
+
+export function decodeCursor(cursor: string): Record<string, unknown> {
+  return JSON.parse(Buffer.from(cursor, 'base64url').toString('utf-8'));
+}
+```
+
+**`total` field note:** The `total` count uses `COUNT(*) OVER()` for filtered queries or a cached approximate count (via `pg_class.reltuples`) for unfiltered large tables. Exact counts on 50M+ row tables are expensive; the API will return approximate totals and indicate this with a `totalIsApproximate: true` field when applicable.
+
+### 7.5 Rate Limiting
+
+**Strategy:** Token bucket algorithm implemented via Redis (sliding window), applied per authenticated user and role.
+
+**Limits by role:**
+
+| Role | Requests/Minute | Burst Allowance | Use Case |
+|------|----------------|-----------------|----------|
+| Super Admin | 1000 | 1200 | System administration, bulk operations |
+| Org Admin | 300 | 400 | Organization management, reports |
+| Org Member | 100 | 150 | Standard dashboard usage |
+| Share Viewer | 30 | 40 | Public share link access |
+
+**Response headers (all API responses):**
+
+```
+X-RateLimit-Limit: 100
+X-RateLimit-Remaining: 87
+X-RateLimit-Reset: 1706745600
+```
+
+**Rate limit exceeded response (HTTP 429):**
+
+```json
+{
+  "error": {
+    "code": "RATE_LIMITED",
+    "message": "Rate limit exceeded. Try again in 23 seconds.",
+    "details": {
+      "retryAfter": 23,
+      "limit": 100,
+      "resetAt": "2026-02-09T12:00:00Z"
+    }
+  }
+}
+```
+
+**Implementation sketch:**
+
+```typescript
+// apps/web/lib/rate-limit.ts
+import { Redis } from 'ioredis';
+
+interface RateLimitConfig {
+  limit: number;
+  windowMs: number;
+}
+
+const ROLE_LIMITS: Record<string, RateLimitConfig> = {
+  super_admin: { limit: 1000, windowMs: 60_000 },
+  org_admin:   { limit: 300,  windowMs: 60_000 },
+  org_member:  { limit: 100,  windowMs: 60_000 },
+  share_viewer:{ limit: 30,   windowMs: 60_000 },
+};
+
+export async function checkRateLimit(
+  redis: Redis,
+  userId: string,
+  role: string,
+): Promise<{ allowed: boolean; remaining: number; resetAt: number }> {
+  const config = ROLE_LIMITS[role] ?? ROLE_LIMITS.org_member;
+  const key = `rate_limit:${userId}`;
+  const now = Date.now();
+  const windowStart = now - config.windowMs;
+
+  // Sliding window using sorted set
+  const multi = redis.multi();
+  multi.zremrangebyscore(key, 0, windowStart);
+  multi.zadd(key, now.toString(), `${now}:${Math.random()}`);
+  multi.zcard(key);
+  multi.pexpire(key, config.windowMs);
+  const results = await multi.exec();
+
+  const count = (results?.[2]?.[1] as number) ?? 0;
+  const remaining = Math.max(0, config.limit - count);
+  const resetAt = Math.ceil((now + config.windowMs) / 1000);
+
+  return { allowed: count <= config.limit, remaining, resetAt };
+}
+```
+
+### 7.6 Input Validation
+
+**Strategy:** Zod schemas shared between frontend and API via `packages/shared`. Every API endpoint validates request body, query parameters, and path parameters against Zod schemas before processing.
+
+**Schema sharing pattern:**
+
+```typescript
+// packages/shared/src/schemas/asset.ts
+import { z } from 'zod';
+
+// Shared validation schema — used by both API and frontend forms
+export const CreateAssetSchema = z.object({
+  title: z.string().min(1).max(500),
+  patentNumber: z.string().regex(/^\d{7,8}$/, 'Invalid patent number'),
+  type: z.enum(['patent', 'application', 'pct']),
+  assigneeId: z.string().uuid(),
+  metadata: z.record(z.unknown()).optional(),
+});
+
+export const UpdateAssetSchema = CreateAssetSchema.partial();
+
+export const AssetQuerySchema = z.object({
+  q: z.string().optional(),
+  type: z.enum(['patent', 'application', 'pct']).optional(),
+  assigneeId: z.string().uuid().optional(),
+  ...PaginationQuerySchema.shape,
+});
+
+export type CreateAssetInput = z.infer<typeof CreateAssetSchema>;
+export type UpdateAssetInput = z.infer<typeof UpdateAssetSchema>;
+```
+
+**API route validation wrapper:**
+
+```typescript
+// apps/web/lib/api-handler.ts
+import { NextRequest, NextResponse } from 'next/server';
+import { z, ZodSchema } from 'zod';
+import { AppError } from '@patentrack/shared/errors';
+
+interface RouteConfig<TBody = unknown, TQuery = unknown> {
+  body?: ZodSchema<TBody>;
+  query?: ZodSchema<TQuery>;
+  handler: (req: NextRequest, ctx: {
+    body: TBody;
+    query: TQuery;
+    user: AuthUser;
+    requestId: string;
+  }) => Promise<NextResponse>;
+}
+
+export function apiRoute<TBody, TQuery>(config: RouteConfig<TBody, TQuery>) {
+  return async (req: NextRequest) => {
+    const requestId = req.headers.get('x-request-id') ?? crypto.randomUUID();
+
+    try {
+      // Validate body
+      let body: TBody = undefined as TBody;
+      if (config.body) {
+        const raw = await req.json().catch(() => ({}));
+        const result = config.body.safeParse(raw);
+        if (!result.success) {
+          return NextResponse.json(
+            {
+              error: {
+                code: 'VALIDATION_ERROR',
+                message: 'Request validation failed.',
+                details: { fieldErrors: result.error.flatten().fieldErrors },
+              },
+            },
+            { status: 400, headers: { 'X-Request-ID': requestId } },
+          );
+        }
+        body = result.data;
+      }
+
+      // Validate query parameters
+      let query: TQuery = undefined as TQuery;
+      if (config.query) {
+        const params = Object.fromEntries(req.nextUrl.searchParams);
+        const result = config.query.safeParse(params);
+        if (!result.success) {
+          return NextResponse.json(
+            {
+              error: {
+                code: 'VALIDATION_ERROR',
+                message: 'Query parameter validation failed.',
+                details: { fieldErrors: result.error.flatten().fieldErrors },
+              },
+            },
+            { status: 400, headers: { 'X-Request-ID': requestId } },
+          );
+        }
+        query = result.data;
+      }
+
+      const user = await getAuthUser(req); // From Section 3
+      const response = await config.handler(req, { body, query, user, requestId });
+      response.headers.set('X-Request-ID', requestId);
+      return response;
+    } catch (error) {
+      if (error instanceof AppError) {
+        return NextResponse.json(error.toJSON(), {
+          status: error.statusCode,
+          headers: { 'X-Request-ID': requestId },
+        });
+      }
+      console.error('Unhandled API error:', error);
+      return NextResponse.json(
+        { error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } },
+        { status: 500, headers: { 'X-Request-ID': requestId } },
+      );
+    }
+  };
+}
+```
+
+### 7.7 Response Caching
+
+**Strategy:** HTTP-native caching using `ETag` and `Cache-Control` headers. Tenant-specific data is always `private` to prevent CDN leakage across tenants.
+
+| Data Type | Cache Strategy | Headers |
+|-----------|---------------|---------|
+| Public share data | CDN-cacheable | `Cache-Control: public, max-age=300` + `ETag` |
+| Tenant dashboard data | Private, short-lived | `Cache-Control: private, max-age=60` + `ETag` |
+| Static reference data (CPC codes) | Long-lived | `Cache-Control: public, max-age=86400` + `ETag` |
+| User-specific data | No store | `Cache-Control: private, no-store` |
+| Mutation responses | No cache | `Cache-Control: no-cache` |
+
+**ETag implementation:**
+
+```typescript
+// apps/web/lib/etag.ts
+import { createHash } from 'crypto';
+import { NextRequest, NextResponse } from 'next/server';
+
+export function withETag(
+  req: NextRequest,
+  data: unknown,
+  cacheControl: string,
+): NextResponse {
+  const body = JSON.stringify(data);
+  const etag = `"${createHash('md5').update(body).digest('hex')}"`;
+
+  // Check If-None-Match
+  const ifNoneMatch = req.headers.get('if-none-match');
+  if (ifNoneMatch === etag) {
+    return new NextResponse(null, {
+      status: 304,
+      headers: { ETag: etag, 'Cache-Control': cacheControl },
+    });
+  }
+
+  return NextResponse.json(data, {
+    headers: { ETag: etag, 'Cache-Control': cacheControl },
+  });
+}
+```
+
+### 7.8 Request IDs & Tracing
+
+Every API request is assigned a UUID via the `X-Request-ID` header for end-to-end tracing:
+
+1. **Client** may send `X-Request-ID` with the request.
+2. **API middleware** uses the provided ID or generates a new UUID.
+3. **ID is propagated** to all downstream calls (database queries, Redis operations, job queue).
+4. **ID is returned** in the response `X-Request-ID` header.
+5. **Structured logs** include the request ID for correlation.
+
+```typescript
+// apps/web/middleware.ts (partial — request ID handling)
+import { NextRequest, NextResponse } from 'next/server';
+
+export function middleware(req: NextRequest) {
+  const requestId = req.headers.get('x-request-id') ?? crypto.randomUUID();
+
+  // Clone request with request ID header
+  const headers = new Headers(req.headers);
+  headers.set('x-request-id', requestId);
+
+  const response = NextResponse.next({
+    request: { headers },
+  });
+  response.headers.set('x-request-id', requestId);
+
+  return response;
+}
+```
+
+### 7.9 Body Size Limits
+
+| Endpoint Type | Max Body Size | Rationale |
+|--------------|--------------|-----------|
+| Standard API requests | 1 MB | Sufficient for all JSON payloads (down from legacy 100MB — S-27) |
+| File uploads (`/api/v1/admin/upload`) | 50 MB | Document attachments, bulk imports |
+
+**Implementation via Next.js config:**
+
+```typescript
+// apps/web/app/api/v1/admin/upload/route.ts
+export const config = {
+  api: {
+    bodyParser: {
+      sizeLimit: '50mb',
+    },
+  },
+};
+
+// Default (next.config.ts)
+// Next.js 15 default body limit is 1MB — no override needed for standard routes
+```
+
+### 7.10 CORS Policy
+
+**Strategy:** Explicit origin allowlist only — no wildcard `*` (fixing security vulnerability S-20 from Stage A analysis).
+
+```typescript
+// apps/web/middleware.ts (partial — CORS handling)
+const ALLOWED_ORIGINS = new Set([
+  process.env.NEXT_PUBLIC_APP_URL,        // e.g., https://app.patentrack.com
+  process.env.NEXT_PUBLIC_ADMIN_URL,      // e.g., https://admin.patentrack.com
+  ...(process.env.CORS_EXTRA_ORIGINS?.split(',') ?? []),
+]);
+
+function handleCORS(req: NextRequest, res: NextResponse): NextResponse {
+  const origin = req.headers.get('origin');
+
+  if (origin && ALLOWED_ORIGINS.has(origin)) {
+    res.headers.set('Access-Control-Allow-Origin', origin);
+    res.headers.set('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
+    res.headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Request-ID');
+    res.headers.set('Access-Control-Expose-Headers', 'X-Request-ID, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset');
+    res.headers.set('Access-Control-Max-Age', '86400');
+    res.headers.set('Access-Control-Allow-Credentials', 'true');
+  }
+
+  return res;
+}
+```
+
+### 7.11 OpenAPI Specification
+
+**Auto-generation from Zod schemas** using `@asteasolutions/zod-to-openapi`:
+
+```typescript
+// apps/web/lib/openapi.ts
+import { OpenAPIRegistry, OpenApiGeneratorV31 } from '@asteasolutions/zod-to-openapi';
+import { CreateAssetSchema, AssetQuerySchema } from '@patentrack/shared/schemas/asset';
+
+const registry = new OpenAPIRegistry();
+
+// Register schemas
+registry.register('CreateAssetInput', CreateAssetSchema);
+
+// Register paths
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/assets',
+  summary: 'List assets',
+  request: { query: AssetQuerySchema },
+  responses: {
+    200: {
+      description: 'Paginated list of assets',
+      content: { 'application/json': { schema: PaginatedResponseSchema(AssetSchema) } },
+    },
+  },
+});
+
+// Generate spec
+const generator = new OpenApiGeneratorV31(registry.definitions);
+export const openApiSpec = generator.generateDocument({
+  openapi: '3.1.0',
+  info: {
+    title: 'PatenTrack3 API',
+    version: '1.0.0',
+    description: 'Patent tracking and portfolio management API',
+  },
+  servers: [{ url: '/api/v1' }],
+});
+```
+
+**Served at:** `GET /api/v1/docs` (JSON spec) and `GET /api/v1/docs/ui` (Swagger UI / Redoc).
+
+---
+
+## 8. Deployment & Infrastructure
+
+### 8.1 Recommended Stack (Startup Budget)
+
+The following stack is optimized for a startup-stage project with <100 tenants, prioritizing developer velocity, operational simplicity, and cost efficiency.
+
+| Component | Service | Why |
+|-----------|---------|-----|
+| Frontend (Next.js) | Vercel | Zero-config Next.js hosting, edge functions, global CDN, PR previews |
+| API/BFF | Vercel (same Next.js app) | Section 1.3 chose Next.js API routes as BFF — single deployment |
+| Workers | Railway (background workers) | Long-running ingestion (12GB files), cron scheduling, persistent BullMQ consumers |
+| PostgreSQL | Neon | Serverless Postgres, branching for staging, connection pooling, scale-to-zero |
+| Redis | Upstash | Serverless Redis, BullMQ compatible, per-request pricing, global replication |
+| File storage | AWS S3 (private buckets + signed URLs) | Fixing S-09 (public S3 bucket vulnerability), pre-signed URLs for secure access |
+| Secrets management | Environment variables + Infisical | Fixing S-05, S-06, S-10, S-12 (hardcoded credentials), centralized secret rotation |
+
+### 8.2 AWS-Native Alternative (Scale-Up Path)
+
+For when the project scales beyond startup stage or requires more control:
+
+| Component | Startup Stack | AWS-Native Alternative |
+|-----------|--------------|----------------------|
+| Frontend | Vercel | AWS CloudFront + S3 (static) + ECS Fargate (SSR) |
+| API/BFF | Vercel | ECS Fargate (Next.js container) + ALB |
+| Workers | Railway | ECS Fargate (worker tasks) + SQS/EventBridge |
+| PostgreSQL | Neon | RDS PostgreSQL (Multi-AZ) |
+| Redis | Upstash | ElastiCache for Redis (cluster mode) |
+| File storage | AWS S3 | AWS S3 (same) |
+| Secrets | Infisical | AWS Secrets Manager + Parameter Store |
+| CDN | Vercel Edge | CloudFront |
+| Monitoring | Sentry + Better Uptime | CloudWatch + X-Ray |
+
+**Migration triggers (move to AWS when):**
+- Tenant count exceeds 500+ organizations
+- Vercel bandwidth/function costs exceed $500/month
+- Compliance requirements mandate VPC isolation
+- Need for VPC peering with customer networks
+
+### 8.3 CI/CD Pipeline (GitHub Actions)
+
+```yaml
+# .github/workflows/ci.yml
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main, production]
+  pull_request:
+    branches: [main]
+
+env:
+  TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+  TURBO_TEAM: ${{ vars.TURBO_TEAM }}
+
+jobs:
+  lint-typecheck:
+    name: Lint & Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm turbo run lint typecheck
+
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm turbo run test -- --coverage
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: '**/coverage/'
+
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: patentrack_test
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm turbo run db:migrate
+        env:
+          DATABASE_URL: postgres://test:test@localhost:5432/patentrack_test
+      - run: pnpm turbo run test:integration
+        env:
+          DATABASE_URL: postgres://test:test@localhost:5432/patentrack_test
+          REDIS_URL: redis://localhost:6379
+
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm audit --audit-level=high
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          severity: 'HIGH,CRITICAL'
+
+  build:
+    name: Build
+    needs: [lint-typecheck, unit-tests]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm turbo run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: build
+          path: apps/web/.next/
+
+  deploy-staging:
+    name: Deploy Staging
+    needs: [build, integration-tests, security-scan]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run database migrations
+        run: pnpm turbo run db:migrate
+        env:
+          DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+      - name: Deploy to Vercel (Staging)
+        uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+      - name: Deploy Worker to Railway (Staging)
+        run: railway up --service worker --environment staging
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+
+  deploy-production:
+    name: Deploy Production
+    needs: [build, integration-tests, security-scan]
+    if: github.ref == 'refs/heads/production' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://app.patentrack.com
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run database migrations
+        run: pnpm turbo run db:migrate
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+      - name: Deploy to Vercel (Production)
+        uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+          vercel-args: '--prod'
+      - name: Deploy Worker to Railway (Production)
+        run: railway up --service worker --environment production
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+```
+
+### 8.4 Branch Strategy
+
+```mermaid
+gitGraph
+    commit id: "initial"
+    branch feature/auth
+    checkout feature/auth
+    commit id: "add auth"
+    commit id: "auth tests"
+    checkout main
+    merge feature/auth id: "merge → staging auto-deploy"
+    branch feature/ingestion
+    checkout feature/ingestion
+    commit id: "ingestion workers"
+    checkout main
+    merge feature/ingestion id: "merge → staging auto-deploy "
+    branch production
+    checkout production
+    merge main id: "approved → production deploy"
+```
+
+| Branch | Trigger | Deploys To | Approval |
+|--------|---------|-----------|----------|
+| `feature/*` | Push | Vercel PR Preview | — |
+| `main` | Push (merge) | Staging (auto) | PR review required |
+| `production` | Push (merge from `main`) | Production | Manual approval + PR review |
+
+**Rules:**
+- All changes go through pull requests targeting `main`.
+- `main` is protected: requires 1+ review, passing CI, no force push.
+- `production` is protected: requires 2+ reviews, passing CI, manual approval via GitHub Environments.
+- Feature branches get automatic Vercel PR previews for visual review.
+- Hotfixes: branch from `production`, merge to both `production` and `main`.
+
+### 8.5 Environment Configuration
+
+| Environment | Database | Redis | Workers | Purpose |
+|-------------|----------|-------|---------|---------|
+| Local | Docker Compose (PostgreSQL 16) | Docker Compose (Redis 7) | Local Node.js process | Development & debugging |
+| Staging | Neon (separate branch) | Upstash (separate instance) | Railway (staging service) | Integration testing, QA |
+| Production | Neon (production branch) | Upstash (production instance) | Railway (production service) | Live system |
+
+**Local development setup:**
+
+```yaml
+# docker-compose.yml
+services:
+  postgres:
+    image: postgres:16
+    ports: ['5432:5432']
+    environment:
+      POSTGRES_DB: patentrack_dev
+      POSTGRES_USER: patentrack
+      POSTGRES_PASSWORD: patentrack_dev
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports: ['6379:6379']
+    volumes:
+      - redisdata:/data
+
+  mailhog:
+    image: mailhog/mailhog
+    ports: ['1025:1025', '8025:8025']
+
+volumes:
+  pgdata:
+  redisdata:
+```
+
+**Environment variables (per environment):**
+
+```bash
+# Shared across environments (structure — values differ)
+DATABASE_URL=               # PostgreSQL connection string
+REDIS_URL=                  # Redis connection string
+JWT_SECRET=                 # JWT signing secret (min 256-bit)
+JWT_REFRESH_SECRET=         # Refresh token signing secret
+NEXT_PUBLIC_APP_URL=        # Public app URL
+S3_BUCKET=                  # S3 bucket name
+S3_REGION=                  # S3 region
+AWS_ACCESS_KEY_ID=          # S3 credentials
+AWS_SECRET_ACCESS_KEY=      # S3 credentials
+SENTRY_DSN=                 # Sentry error tracking
+SLACK_WEBHOOK_URL=          # Alerting
+```
+
+### 8.6 Monitoring & Observability
+
+| Category | Tool | Purpose |
+|----------|------|---------|
+| Error Tracking (APM) | Sentry | Exception capture, performance tracing, release tracking (already partially in use) |
+| Structured Logging | Pino (JSON) → service log aggregation | Request logs, error context, audit trail |
+| Job Monitoring | BullMQ Board + Slack alerts | Ingestion job status, failure alerts, queue depth |
+| Database Monitoring | Neon built-in dashboard | Query performance, connection count, storage usage |
+| Redis Monitoring | Upstash built-in dashboard | Memory usage, command rate, key count |
+| Uptime Monitoring | Better Uptime (free tier) | HTTP endpoint checks, SSL expiry, status page |
+| Alerting | Slack webhooks | Error spikes, failed jobs, DB connection issues, deployment events |
+
+**Structured logging format:**
+
+```typescript
+// packages/shared/src/logger.ts
+import pino from 'pino';
+
+export const logger = pino({
+  level: process.env.LOG_LEVEL ?? 'info',
+  formatters: {
+    level: (label) => ({ level: label }),
+  },
+  base: {
+    service: process.env.SERVICE_NAME ?? 'patentrack',
+    environment: process.env.NODE_ENV,
+  },
+  timestamp: pino.stdTimeFunctions.isoTime,
+});
+
+// Usage in API routes:
+// logger.info({ requestId, method, path, userId, duration }, 'Request completed');
+// logger.error({ requestId, error: err.message, stack: err.stack }, 'Request failed');
+```
+
+**Alert rules:**
+
+| Alert | Condition | Channel | Severity |
+|-------|-----------|---------|----------|
+| Error spike | >10 errors in 5 minutes | Slack `#alerts` | 🔴 Critical |
+| Ingestion failure | Any ingestion job fails 3 retries | Slack `#ingestion` | 🔴 Critical |
+| Database connection pool exhaustion | Active connections >80% of max | Slack `#alerts` | 🟡 Warning |
+| API latency | p95 >2s for 5 minutes | Slack `#alerts` | 🟡 Warning |
+| Disk/storage usage | >80% capacity | Slack `#alerts` | 🟡 Warning |
+| SSL certificate expiry | <14 days until expiry | Slack `#alerts` | 🟡 Warning |
+| Deployment success/failure | Every deploy | Slack `#deployments` | ℹ️ Info |
+
+### 8.7 Deployment Topology Diagram
+
+```mermaid
+graph TB
+    subgraph "Developer Workstation"
+        DEV["Local Dev<br/>(pnpm dev)"]
+        DOCKER["Docker Compose<br/>(PG + Redis + MailHog)"]
+        DEV --> DOCKER
+    end
+
+    subgraph "GitHub"
+        REPO["GitHub Repository<br/>(monorepo)"]
+        ACTIONS["GitHub Actions<br/>(CI/CD Pipeline)"]
+        REPO --> ACTIONS
+    end
+
+    subgraph "Vercel (Frontend + API)"
+        VERCEL_EDGE["Vercel Edge Network<br/>(Global CDN)"]
+        VERCEL_FN["Vercel Serverless Functions<br/>(Next.js API Routes)"]
+        VERCEL_SSR["Vercel SSR<br/>(Server Components)"]
+        VERCEL_PREVIEW["PR Preview Deployments"]
+        
+        VERCEL_EDGE --> VERCEL_FN
+        VERCEL_EDGE --> VERCEL_SSR
+    end
+
+    subgraph "Railway (Workers)"
+        WORKER_SVC["Worker Service<br/>(BullMQ Consumers)"]
+        SCHEDULER_SVC["Scheduler Service<br/>(Cron Jobs)"]
+        BULL_BOARD_SVC["BullMQ Board<br/>(Job Dashboard)"]
+    end
+
+    subgraph "Neon (PostgreSQL)"
+        NEON_PROD["Production Branch<br/>(PostgreSQL 16)"]
+        NEON_STAGING["Staging Branch<br/>(PostgreSQL 16)"]
+        NEON_POOL["Connection Pooler<br/>(PgBouncer)"]
+        
+        NEON_PROD --> NEON_POOL
+        NEON_STAGING --> NEON_POOL
+    end
+
+    subgraph "Upstash (Redis)"
+        UPSTASH_PROD["Production Redis"]
+        UPSTASH_STAGING["Staging Redis"]
+    end
+
+    subgraph "AWS"
+        S3["S3 Bucket<br/>(Private, Signed URLs)"]
+    end
+
+    subgraph "Observability"
+        SENTRY["Sentry<br/>(Error Tracking)"]
+        BETTER_UPTIME["Better Uptime<br/>(Status Page)"]
+        SLACK["Slack Webhooks<br/>(Alerts)"]
+    end
+
+    %% Connections
+    ACTIONS -->|"deploy staging"| VERCEL_FN
+    ACTIONS -->|"deploy production"| VERCEL_FN
+    ACTIONS -->|"deploy workers"| WORKER_SVC
+    ACTIONS -->|"run migrations"| NEON_POOL
+
+    VERCEL_FN -->|"SQL queries"| NEON_POOL
+    VERCEL_FN -->|"cache/sessions"| UPSTASH_PROD
+    VERCEL_FN -->|"enqueue jobs"| UPSTASH_PROD
+    VERCEL_SSR -->|"SQL queries"| NEON_POOL
+    VERCEL_FN -->|"signed URLs"| S3
+
+    WORKER_SVC -->|"consume jobs"| UPSTASH_PROD
+    WORKER_SVC -->|"SQL writes"| NEON_POOL
+    SCHEDULER_SVC -->|"schedule jobs"| UPSTASH_PROD
+
+    VERCEL_FN -->|"errors"| SENTRY
+    WORKER_SVC -->|"errors"| SENTRY
+    WORKER_SVC -->|"alerts"| SLACK
+    BETTER_UPTIME -->|"health checks"| VERCEL_EDGE
+
+    DEV -->|"push"| REPO
+    REPO -->|"PR preview"| VERCEL_PREVIEW
+```
+
+### 8.8 Infrastructure Cost Estimate (Startup Stage)
+
+| Service | Tier | Estimated Monthly Cost |
+|---------|------|----------------------|
+| Vercel | Pro | $20/seat |
+| Railway | Starter | $5 + usage (~$20-40) |
+| Neon | Launch | $19 (includes 10GB storage) |
+| Upstash | Pay-as-you-go | ~$10-20 |
+| AWS S3 | Standard | ~$5-10 |
+| Sentry | Team | $26/month |
+| Better Uptime | Free | $0 |
+| Infisical | Free (self-hosted) or $5/seat | ~$0-25 |
+| **Total** | | **~$105-180/month** |
+
+**Cost notes:**
+- This estimate assumes <100 tenants, <10 team members, moderate API traffic.
+- The serverless/pay-as-you-go model means costs scale with actual usage, not provisioned capacity.
+- Neon's branching feature eliminates the need for a separate staging database instance (included in base tier).
+- Vercel's free tier may suffice initially; Pro is recommended for production (team features, analytics, more bandwidth).
+
+---
+
 ## Cross-References
 
 - **Domain Model:** See `docs/design/01-domain-model.md` for complete schema design, RLS policies, migration path, and business rule preservation matrix.
 - **Stage A Analysis:** See `docs/analysis/07-cross-application-summary.md` for legacy system analysis, all 65 business rules, and 30 security vulnerabilities.
-- **Part B (Sections 5-9):** Will cover caching strategy, API design, frontend architecture, deployment & infrastructure, and testing strategy.
+- **Part B (Remaining):** Sections 5 (Caching & Performance Strategy), 6 (Frontend Architecture), and 9 (Testing Strategy) will be covered in follow-up sessions.
 
 ---
 
-**Document Status:** Part A complete (Sections 1-4)  
+**Document Status:** Sections 1-4 (Part A) and Sections 7-8 (Part B — API Design Principles & Deployment Infrastructure) complete
 **Next:** Part B — Sections 5-9 (Caching, API Design, Frontend, Deployment, Testing)
