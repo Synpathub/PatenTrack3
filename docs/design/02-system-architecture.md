@@ -3,9 +3,9 @@
 **Stage B — Architecture Design**  
 **Version:** 1.0  
 **Date:** 2026-02-09  
-**Status:** Draft — Sections 1–6
+**Status:** Draft — Sections 1–8
 
-> **⚠️ In Progress** — This document covers Sections 1 through 6. Sections 7–9 (Frontend Architecture, Deployment & Infrastructure, Testing Strategy) will be added in a follow-up session.
+> **⚠️ In Progress** — This document covers Sections 1 through 8. Sections 9–10 (Frontend Architecture, Testing Strategy) will be added in a follow-up session.
 
 ---
 
@@ -17,9 +17,9 @@
 4. [Ingestion Pipeline Architecture](#4-ingestion-pipeline-architecture)
 5. [Caching Strategy](#5-caching-strategy)
 6. [Real-Time Architecture](#6-real-time-architecture)
-7. _(Part B)_ API Design
-8. _(Part B)_ Frontend Architecture
-9. _(Part B)_ Deployment & Infrastructure
+7. [API Design Principles](#7-api-design-principles)
+8. [Deployment & Infrastructure](#8-deployment--infrastructure)
+9. _(Part B)_ Frontend Architecture
 10. _(Part B)_ Testing Strategy
 
 ---
@@ -1783,13 +1783,719 @@ This ensures users see fresh data immediately after ingestion without polling, a
 
 ---
 
+## 7. API Design Principles
+
+This section establishes the conventions for PatenTrack3's ~80 consolidated API endpoints. Detailed endpoint specifications (request/response schemas, authorization requirements per endpoint) will be defined in a subsequent session. The decisions here build on Section 1's hybrid architecture: **Next.js API routes as BFF** for all request-response operations.
+
+### 7.1 Protocol Decision: REST with OpenAPI
+
+**Decision:** REST with OpenAPI 3.1 auto-generated from Zod schemas.
+
+**Evaluation:**
+
+| Criterion | tRPC | REST + OpenAPI |
+|-----------|------|----------------|
+| Type safety (client ↔ server) | ✅ End-to-end via inference | ✅ Via Zod schemas in `packages/shared` + codegen |
+| Developer Experience (DX) with Next.js App Router | ✅ Excellent (direct import) | ✅ Good (standard fetch, React Query) |
+| Share Viewer (public-facing) | ⚠️ Requires separate REST layer | ✅ Native — no adapter needed |
+| Future third-party integrations | ❌ Non-standard; clients must use tRPC | ✅ Standard HTTP; any client can consume |
+| OpenAPI spec / documentation | ❌ Not native (adapters exist but add complexity) | ✅ Auto-generated from Zod via `zod-openapi` |
+| Tooling ecosystem | ⚠️ Growing but smaller | ✅ Mature (Postman, Swagger UI, codegen) |
+| Learning curve for new devs | ⚠️ tRPC-specific patterns | ✅ Industry-standard REST conventions |
+
+**Rationale:**
+
+The Share Viewer is a public-facing feature that serves read-only portfolio views to unauthenticated external users via shareable links. This is a public API surface that must work with standard HTTP semantics — no tRPC client should be required. Additionally, PatenTrack may eventually expose data to enterprise customers or patent analytics platforms, making REST + OpenAPI the safer long-term choice.
+
+tRPC would offer marginally better DX for internal routes, but the cost of maintaining a separate REST layer for public endpoints (Share Viewer, potential future integrations) outweighs the benefit. With Zod schemas shared via `packages/shared`, we achieve type safety across the stack without tRPC's tight coupling.
+
+### 7.2 URL Structure
+
+All API routes follow a resource-oriented URL pattern with versioning:
+
+```
+/api/v1/{resource}
+/api/v1/{resource}/{id}
+/api/v1/{resource}/{id}/{sub-resource}
+```
+
+**Route organization by domain:**
+
+| Domain | Base Path | Examples |
+|--------|-----------|---------|
+| Assets (patents/trademarks) | `/api/v1/assets` | `GET /api/v1/assets`, `GET /api/v1/assets/:id` |
+| Families | `/api/v1/families` | `GET /api/v1/families`, `GET /api/v1/families/:id/assets` |
+| Companies | `/api/v1/companies` | `GET /api/v1/companies`, `GET /api/v1/companies/:id` |
+| Customers (orgs) | `/api/v1/customers` | `GET /api/v1/customers`, `GET /api/v1/customers/:id/dashboard` |
+| Dashboards | `/api/v1/dashboards` | `GET /api/v1/dashboards/:type` |
+| Events (assignments) | `/api/v1/events` | `GET /api/v1/events`, `GET /api/v1/events/:id` |
+| Ingestion | `/api/v1/ingestion` | `POST /api/v1/ingestion/trigger`, `GET /api/v1/ingestion/status` |
+| Admin | `/api/v1/admin` | `GET /api/v1/admin/users`, `POST /api/v1/admin/orgs` |
+| Share | `/api/v1/share` | `GET /api/v1/share/:token` |
+
+**Conventions:**
+- Plural nouns for collections (`/assets`, not `/asset`)
+- Resource IDs use the format `/:id` (UUIDs, matching the domain model)
+- Nested resources for strong parent-child relationships only (`/families/:id/assets`)
+- Action endpoints use verbs only when CRUD semantics don't apply (`/ingestion/trigger`)
+
+### 7.3 OpenAPI Specification
+
+OpenAPI 3.1 specs are auto-generated from Zod schemas using `zod-openapi`:
+
+```typescript
+// packages/shared/src/schemas/asset.ts
+import { z } from 'zod';
+import { extendZodWithOpenApi } from 'zod-openapi';
+
+extendZodWithOpenApi(z);
+
+export const AssetSchema = z.object({
+  id: z.string().uuid().openapi({ description: 'Unique asset identifier' }),
+  type: z.enum(['patent', 'trademark', 'application']).openapi({ description: 'Asset type' }),
+  title: z.string().openapi({ description: 'Asset title' }),
+  number: z.string().openapi({ description: 'Patent/trademark number' }),
+  status: z.enum(['active', 'expired', 'pending', 'abandoned']).openapi({ description: 'Current status' }),
+  familyId: z.string().uuid().nullable().openapi({ description: 'Parent family ID' }),
+  customerId: z.string().uuid().openapi({ description: 'Owning organization ID' }),
+  createdAt: z.string().datetime().openapi({ description: 'Creation timestamp' }),
+  updatedAt: z.string().datetime().openapi({ description: 'Last update timestamp' }),
+}).openapi('Asset');
+```
+
+The OpenAPI spec is served at `/api/v1/docs` (Swagger UI) and `/api/v1/openapi.json` (raw spec) in non-production environments.
+
+### 7.4 Error Format
+
+All API errors follow a consistent envelope format:
+
+```json
+{
+  "error": {
+    "code": "FORBIDDEN",
+    "message": "You do not have permission to access this resource.",
+    "details": {}
+  }
+}
+```
+
+**Standard error codes:**
+
+| HTTP Status | Error Code | Usage |
+|-------------|-----------|-------|
+| 400 | `VALIDATION_ERROR` | Invalid input (Zod validation failure). `details` contains field-level errors. |
+| 401 | `UNAUTHORIZED` | Missing or invalid authentication token. |
+| 403 | `FORBIDDEN` | Authenticated but insufficient permissions (RLS or role check). |
+| 404 | `NOT_FOUND` | Resource does not exist or is not accessible to the tenant. |
+| 409 | `CONFLICT` | Duplicate resource or concurrent modification conflict. |
+| 422 | `UNPROCESSABLE_ENTITY` | Valid syntax but semantic error (e.g., invalid state transition). |
+| 429 | `RATE_LIMITED` | Rate limit exceeded. `details` contains `retryAfter` (seconds). |
+| 500 | `INTERNAL_ERROR` | Unexpected server error. `details` contains `requestId` for tracing. |
+
+**Validation error example:**
+
+```json
+{
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "Invalid request body.",
+    "details": {
+      "fieldErrors": {
+        "email": ["Invalid email address"],
+        "name": ["Required"]
+      }
+    }
+  }
+}
+```
+
+### 7.5 Pagination
+
+**Cursor-based pagination** for all collection endpoints. This is critical for PatenTrack's scale — the assignments table has 50M+ rows, and offset-based pagination degrades severely at high page numbers.
+
+**Response format:**
+
+```json
+{
+  "data": [
+    { "id": "...", "..." : "..." }
+  ],
+  "cursor": {
+    "next": "eyJpZCI6IjEyMzQ1In0=",
+    "hasMore": true
+  },
+  "total": 1523847
+}
+```
+
+**Request parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `cursor` | string | `null` | Opaque cursor from previous response. Omit for first page. |
+| `limit` | integer | 50 | Items per page. Max: 200. |
+| `sort` | string | varies | Sort field (e.g., `createdAt`, `number`). |
+| `order` | string | `desc` | Sort direction: `asc` or `desc`. |
+
+**Implementation notes:**
+- Cursors are Base64-encoded JSON containing the sort key and ID for deterministic ordering.
+- The `total` field is optional and only included when `includeTotal=true` query param is set (expensive COUNT on large tables; uses cached approximate counts when possible).
+- For the Share Viewer (`/api/v1/share/:token`), pagination limits are stricter: max 25 items per page.
+
+### 7.6 Rate Limiting
+
+Rate limits are enforced per role using a sliding-window algorithm backed by Redis:
+
+| Role | Limit | Window | Rationale |
+|------|-------|--------|-----------|
+| Super Admin | 1000 req/min | 1 minute | Admin tooling, bulk operations |
+| Org Admin | 300 req/min | 1 minute | Dashboard management, user admin |
+| Org Member | 100 req/min | 1 minute | Standard dashboard usage |
+| Share Viewer | 30 req/min | 1 minute | Public read-only; abuse prevention |
+
+**Response headers (included on every response):**
+
+```
+X-RateLimit-Limit: 100
+X-RateLimit-Remaining: 87
+X-RateLimit-Reset: 1707451200
+```
+
+- `X-RateLimit-Limit`: Maximum requests allowed in the current window.
+- `X-RateLimit-Remaining`: Remaining requests in the current window.
+- `X-RateLimit-Reset`: Unix timestamp (seconds) when the window resets.
+
+When a rate limit is exceeded, the API responds with:
+
+```http
+HTTP/1.1 429 Too Many Requests
+Retry-After: 32
+X-RateLimit-Limit: 100
+X-RateLimit-Remaining: 0
+X-RateLimit-Reset: 1707451200
+
+{
+  "error": {
+    "code": "RATE_LIMITED",
+    "message": "Rate limit exceeded. Try again in 32 seconds.",
+    "details": { "retryAfter": 32 }
+  }
+}
+```
+
+### 7.7 Input Validation
+
+All input validation uses **Zod schemas** shared via the `packages/shared` package. The same schemas are used for:
+
+1. **API request validation** — Next.js API route handlers parse and validate request bodies/params.
+2. **Frontend form validation** — React Hook Form + Zod resolver for client-side validation.
+3. **OpenAPI generation** — `zod-openapi` generates OpenAPI specs from the same schemas.
+
+```typescript
+// packages/shared/src/schemas/create-customer.ts
+import { z } from 'zod';
+
+export const CreateCustomerSchema = z.object({
+  name: z.string().min(1).max(255),
+  slug: z.string().regex(/^[a-z0-9-]+$/).min(2).max(63),
+  plan: z.enum(['free', 'pro', 'enterprise']),
+  settings: z.object({
+    emailNotifications: z.boolean().default(true),
+    slackWebhookUrl: z.string().url().optional(),
+  }).optional(),
+});
+
+export type CreateCustomerInput = z.infer<typeof CreateCustomerSchema>;
+```
+
+```typescript
+// apps/web/src/app/api/v1/customers/route.ts
+import { CreateCustomerSchema } from '@patentrack/shared/schemas';
+
+export async function POST(request: Request) {
+  const body = await request.json();
+  const result = CreateCustomerSchema.safeParse(body);
+
+  if (!result.success) {
+    return Response.json({
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: 'Invalid request body.',
+        details: { fieldErrors: result.error.flatten().fieldErrors },
+      },
+    }, { status: 400 });
+  }
+
+  // result.data is fully typed as CreateCustomerInput
+  const customer = await createCustomer(result.data);
+  return Response.json({ data: customer }, { status: 201 });
+}
+```
+
+### 7.8 Response Caching
+
+**ETag + If-None-Match** for immutable and slowly-changing data:
+
+| Data Type | Cache Strategy | Cache-Control | ETag |
+|-----------|---------------|---------------|------|
+| Patent/trademark metadata | ETag | `private, max-age=3600` | Hash of `updatedAt` |
+| Assignment history | ETag | `private, max-age=86400` | Hash of latest assignment timestamp |
+| Dashboard aggregations | Short TTL | `private, max-age=300, stale-while-revalidate=60` | — |
+| Share Viewer data | ETag + CDN | `public, max-age=3600, s-maxage=86400` | Hash of portfolio snapshot |
+| User-specific data | No cache | `private, no-store` | — |
+
+**Key rules:**
+- All tenant-scoped data uses `Cache-Control: private` to prevent CDN/proxy caching of tenant data.
+- Share Viewer data is the only `public` cacheable resource (it's intentionally public by design).
+- Ingestion-triggered cache invalidation (see Section 6) ensures stale data is purged when new data arrives.
+
+### 7.9 Request Tracing
+
+Every API request is assigned a **UUID request ID** for end-to-end tracing:
+
+```
+X-Request-ID: 550e8400-e29b-41d4-a716-446655440000
+```
+
+- If the client sends an `X-Request-ID` header, the server uses it (enabling client-side correlation).
+- If no `X-Request-ID` is provided, the server generates one.
+- The request ID is included in all log entries, error responses, and Sentry error reports.
+- This enables tracing a request from the browser → API route → database query → background job (if applicable).
+
+### 7.10 Request Body Limits
+
+| Context | Max Body Size | Rationale |
+|---------|--------------|-----------|
+| Default API requests | 1 MB | Sufficient for all CRUD operations. Reduced from legacy 100MB (S-27). |
+| File uploads (via presigned URL) | 50 MB | Patent documents, logos. Uploads go directly to S3 via presigned URLs; the API only receives the S3 key. |
+| Ingestion payloads | N/A | Ingestion workers download directly from USPTO; no user-uploaded payloads. |
+
+The 1MB default limit is enforced at the Next.js API route level. File uploads bypass the API body limit entirely by using S3 presigned URLs — the client uploads directly to S3 and then notifies the API with the file metadata (key, size, content type).
+
+### 7.11 CORS Policy
+
+**Explicit origin allowlist only** — fixing legacy vulnerability S-20 (wildcard CORS).
+
+```typescript
+// apps/web/next.config.ts — CORS middleware
+const ALLOWED_ORIGINS = [
+  process.env.APP_URL,                    // e.g., https://app.patentrack.com
+  process.env.SHARE_URL,                  // e.g., https://share.patentrack.com
+  ...(process.env.NODE_ENV === 'development'
+    ? ['http://localhost:3000', 'http://localhost:3001']
+    : []),
+];
+```
+
+**Rules:**
+- No wildcard (`*`) origins in any environment.
+- `Access-Control-Allow-Credentials: true` for authenticated endpoints.
+- Preflight (`OPTIONS`) responses are cached for 1 hour (`Access-Control-Max-Age: 3600`).
+- The Share Viewer origin is explicitly allowed (it's a separate subdomain).
+
+### 7.12 API Design Summary
+
+```mermaid
+graph TB
+    subgraph "Client Layer"
+        BROWSER["Browser<br/>(React Query + Zod)"]
+        SHARE["Share Viewer<br/>(Public)"]
+        FUTURE["Future Integrations<br/>(REST + OpenAPI)"]
+    end
+
+    subgraph "API Layer (Next.js API Routes)"
+        MW["Middleware Stack"]
+        ROUTES["Route Handlers<br/>(/api/v1/*)"]
+        OPENAPI["OpenAPI 3.1<br/>(auto-generated)"]
+    end
+
+    subgraph "Middleware Stack"
+        CORS_MW["CORS<br/>(origin allowlist)"]
+        REQID["Request ID<br/>(X-Request-ID)"]
+        AUTH["Auth<br/>(JWT verification)"]
+        RLS_MW["RLS Context<br/>(SET app.tenant_id)"]
+        RATE["Rate Limiter<br/>(Redis sliding window)"]
+        VALIDATE["Input Validation<br/>(Zod schemas)"]
+        BODY["Body Size<br/>(1MB limit)"]
+    end
+
+    BROWSER -->|"HTTPS"| MW
+    SHARE -->|"HTTPS (public)"| MW
+    FUTURE -->|"HTTPS + API Key"| MW
+
+    CORS_MW --> REQID --> AUTH --> RLS_MW --> RATE --> VALIDATE --> BODY --> ROUTES
+
+    ROUTES -->|"SQL (Drizzle + RLS)"| PG[("PostgreSQL")]
+    ROUTES -->|"Cache/Rate State"| REDIS[("Redis")]
+
+    style MW fill:#f9f,stroke:#333,stroke-width:2px
+    style ROUTES fill:#9f9,stroke:#333,stroke-width:2px
+    style OPENAPI fill:#ff9,stroke:#333,stroke-width:2px
+```
+
+**Middleware execution order:**
+1. **CORS** — Reject disallowed origins immediately.
+2. **Request ID** — Assign/propagate `X-Request-ID`.
+3. **Auth** — Verify JWT, extract user/tenant context (skip for Share Viewer public routes).
+4. **RLS Context** — Set `app.tenant_id` on the database connection for row-level security.
+5. **Rate Limiter** — Check Redis sliding-window counter by role.
+6. **Input Validation** — Parse and validate request body/params with Zod.
+7. **Body Size** — Enforce 1MB limit (after validation to provide useful error messages).
+8. **Route Handler** — Execute business logic, return response.
+
+---
+
+## 8. Deployment & Infrastructure
+
+This section defines the deployment architecture, CI/CD pipeline, environment strategy, and monitoring for PatenTrack3. The recommendations are optimized for a startup budget while providing a clear upgrade path to AWS-native infrastructure at scale.
+
+### 8.1 Recommended Infrastructure Stack
+
+**Primary stack (startup budget — optimized for cost and operational simplicity):**
+
+| Component | Service | Why |
+|-----------|---------|-----|
+| Frontend (Next.js) | Vercel | Zero-config Next.js hosting, edge functions, global CDN, PR previews |
+| API/BFF | Vercel (same Next.js app) | Unified deployment; API routes colocated with frontend (Section 1 hybrid decision) |
+| Workers | Railway | Long-running ingestion workers, BullMQ consumers, cron scheduling |
+| PostgreSQL | Neon | Serverless Postgres, branching for staging, connection pooling, autoscaling |
+| Redis | Upstash | Serverless Redis, BullMQ compatible, pay-per-request, global replication |
+| File Storage | AWS S3 (private buckets + signed URLs) | Fixing S-09 (legacy public file access). Presigned URLs for secure upload/download. |
+| Secrets | Environment vars + Infisical | Fixing S-05, S-06, S-10, S-12. Centralized secrets management with rotation support. |
+| DNS/CDN | Vercel (built-in) + Cloudflare (DNS) | Automatic SSL, edge caching for Share Viewer |
+| Email | Resend or AWS SES | Transactional emails (notifications, share invites) |
+
+### 8.2 AWS-Native Alternative (Scale Path)
+
+If PatenTrack grows beyond startup scale (>100 tenants, >1000 concurrent users), the architecture can migrate to AWS-native services:
+
+| Component | Startup Stack | AWS-Native Alternative |
+|-----------|--------------|----------------------|
+| Frontend | Vercel | AWS CloudFront + S3 (static) + Lambda@Edge |
+| API/BFF | Vercel API Routes | ECS Fargate (containerized Next.js) |
+| Workers | Railway | ECS Fargate (dedicated task definitions) |
+| PostgreSQL | Neon | Amazon RDS PostgreSQL (Multi-AZ) |
+| Redis | Upstash | Amazon ElastiCache (Redis OSS) |
+| File Storage | AWS S3 | AWS S3 (same — already AWS-native) |
+| Secrets | Infisical | AWS Secrets Manager |
+| Load Balancer | Vercel (built-in) | Application Load Balancer (ALB) |
+| DNS | Cloudflare | Amazon Route 53 |
+
+**Migration triggers:**
+- Vercel function execution time limits hit (>300s for workers — already mitigated by Railway workers)
+- Need for VPC-level network isolation (compliance requirements)
+- Cost optimization at scale (Vercel per-seat pricing vs. AWS compute pricing)
+- Multi-region deployment requirement
+
+### 8.3 CI/CD Pipeline (GitHub Actions)
+
+```mermaid
+graph LR
+    subgraph "PR Workflow (on pull_request)"
+        LINT["Lint + Type-Check<br/>(turbo run lint typecheck)"]
+        UNIT["Unit Tests<br/>(Vitest)"]
+        INT["Integration Tests<br/>(Docker Compose:<br/>PG + Redis)"]
+        SEC["Security Scan<br/>(npm audit + Trivy)"]
+        BUILD["Build<br/>(turbo run build)"]
+        PREVIEW["PR Preview<br/>(Vercel)"]
+    end
+
+    subgraph "Main Branch (on push to main)"
+        STAGING_BUILD["Build + Test<br/>(full pipeline)"]
+        STAGING_MIGRATE["DB Migration<br/>(Drizzle migrate)"]
+        STAGING_DEPLOY["Deploy Staging<br/>(Vercel + Railway)"]
+    end
+
+    subgraph "Production (on tag or manual)"
+        PROD_APPROVE["Manual Approval<br/>(GitHub Environment)"]
+        PROD_MIGRATE["DB Migration<br/>(Drizzle migrate)"]
+        PROD_DEPLOY["Deploy Production<br/>(Vercel + Railway)"]
+    end
+
+    LINT --> UNIT --> INT --> SEC --> BUILD --> PREVIEW
+    STAGING_BUILD --> STAGING_MIGRATE --> STAGING_DEPLOY
+    PROD_APPROVE --> PROD_MIGRATE --> PROD_DEPLOY
+```
+
+**Pipeline stages (PR workflow):**
+
+| Stage | Tool | Description | Timeout |
+|-------|------|-------------|---------|
+| Lint | ESLint + `turbo run lint` | Code quality, consistent style | 3 min |
+| Type-Check | TypeScript + `turbo run typecheck` | Compile-time type safety across all packages | 3 min |
+| Unit Tests | Vitest + `turbo run test` | Fast unit tests, mocked dependencies | 5 min |
+| Integration Tests | Vitest + Docker Compose | Real PostgreSQL + Redis; tests RLS, queries, BullMQ jobs | 10 min |
+| Security Scan | `npm audit` + Trivy | Dependency vulnerability scanning, container scanning | 3 min |
+| Build | `turbo run build` | Full production build of all packages and apps | 5 min |
+| PR Preview | Vercel (automatic) | Deploy preview for visual review | 3 min |
+
+**Production deployment:**
+
+```yaml
+# .github/workflows/deploy-production.yml (simplified)
+name: Deploy Production
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production  # Requires manual approval
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - run: npm ci
+      - run: npx turbo run lint typecheck test build
+      - name: Run DB migrations
+        run: npx drizzle-kit migrate
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+      - name: Deploy to Vercel
+        run: npx vercel deploy --prod --token=${{ secrets.VERCEL_TOKEN }}
+      - name: Deploy workers to Railway
+        run: railway up --service=workers --environment=production
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+```
+
+### 8.4 Branch Strategy
+
+```mermaid
+gitgraph
+    commit id: "initial"
+    branch feature/auth
+    checkout feature/auth
+    commit id: "add-jwt"
+    commit id: "add-rls"
+    checkout main
+    merge feature/auth id: "merge-auth" tag: "PR Preview ✓"
+    commit id: "auto-deploy-staging" type: HIGHLIGHT
+    branch production
+    checkout production
+    commit id: "deploy-prod" tag: "v1.0.0" type: HIGHLIGHT
+    checkout main
+    branch feature/ingestion
+    commit id: "add-workers"
+    checkout main
+    merge feature/ingestion id: "merge-ingest"
+    commit id: "staging-2" type: HIGHLIGHT
+    checkout production
+    merge main id: "release-1.1" tag: "v1.1.0" type: HIGHLIGHT
+```
+
+| Branch | Trigger | Action |
+|--------|---------|--------|
+| `feature/*` | Push | Vercel PR preview; lint, type-check, test |
+| `main` | Merge PR | Auto-deploy to **staging** environment |
+| `production` | Merge from `main` (with approval) or version tag | Deploy to **production** (requires GitHub Environment approval) |
+
+**Rules:**
+- Direct pushes to `main` and `production` are blocked (branch protection).
+- All merges to `main` require passing CI checks and at least one code review.
+- Merges to `production` require an additional manual approval via GitHub Environments.
+- Hotfixes: Create a branch from `production`, fix, PR to `production` (then cherry-pick to `main`).
+
+### 8.5 Environment Configuration
+
+| Environment | Database | Redis | Workers | Purpose |
+|-------------|----------|-------|---------|---------|
+| Local | Docker Compose (PostgreSQL 16) | Docker Compose (Redis 7) | Local process (`tsx watch`) | Development, debugging |
+| Staging | Neon (branched from production schema) | Upstash (separate instance) | Railway (staging service) | QA, integration testing, demo |
+| Production | Neon (production database) | Upstash (production instance) | Railway (production service) | Live application |
+
+**Local development setup:**
+
+```yaml
+# docker-compose.yml
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: patentrack
+      POSTGRES_USER: patentrack
+      POSTGRES_PASSWORD: localdev
+    ports: ['5432:5432']
+    volumes: ['pgdata:/var/lib/postgresql/data']
+
+  redis:
+    image: redis:7-alpine
+    ports: ['6379:6379']
+
+volumes:
+  pgdata:
+```
+
+**Environment variable management:**
+
+| Variable Category | Local | Staging | Production |
+|-------------------|-------|---------|------------|
+| Database URL | `.env.local` | Infisical (staging) | Infisical (production) |
+| Redis URL | `.env.local` | Infisical (staging) | Infisical (production) |
+| JWT secrets | `.env.local` | Infisical (staging) | Infisical (production) |
+| AWS credentials | `.env.local` | GitHub Actions secrets | Infisical (production) |
+| Third-party API keys | `.env.local` | Infisical (staging) | Infisical (production) |
+
+All secrets are managed through **Infisical** (fixing S-05, S-06, S-10, S-12):
+- No secrets in code or `.env` files committed to the repository.
+- Secrets are injected at runtime via Infisical SDK or synced to Vercel/Railway environment variables.
+- Automatic rotation support for database credentials and API keys.
+- Audit log of all secret access.
+
+### 8.6 Monitoring & Observability
+
+| Category | Tool | What It Monitors |
+|----------|------|-----------------|
+| Error Tracking | Sentry (already partially in use) | Unhandled exceptions, API errors, frontend crashes |
+| Structured Logging | JSON logs → Vercel/Railway log aggregation | Request logs, query performance, auth events |
+| Job Monitoring | BullMQ Board + Slack alerts | Ingestion job status, failures, queue depth, stalled jobs |
+| Database | Neon built-in monitoring | Query performance, connection count, storage usage |
+| Redis | Upstash built-in console | Memory usage, command rate, key count |
+| Uptime | Better Uptime (free tier) | HTTP health checks on `/api/v1/health` every 1 minute |
+| Alerting | Slack webhooks | Error spikes, job failures, database issues, uptime incidents |
+
+**Health check endpoint:**
+
+```typescript
+// apps/web/src/app/api/v1/health/route.ts
+export async function GET() {
+  const checks = {
+    database: await checkDatabase(),   // SELECT 1
+    redis: await checkRedis(),         // PING
+    timestamp: new Date().toISOString(),
+    version: process.env.APP_VERSION || 'unknown',
+  };
+
+  const healthy = checks.database && checks.redis;
+
+  return Response.json(
+    { status: healthy ? 'healthy' : 'degraded', checks },
+    { status: healthy ? 200 : 503 }
+  );
+}
+```
+
+**Alert thresholds:**
+
+| Metric | Warning | Critical | Channel |
+|--------|---------|----------|---------|
+| API error rate (5xx) | >1% over 5 min | >5% over 5 min | Slack `#alerts` |
+| API latency (p95) | >2s | >5s | Slack `#alerts` |
+| Ingestion job failures | >3 consecutive | >10 in 1 hour | Slack `#ingestion` |
+| Queue depth (waiting) | >1000 jobs | >5000 jobs | Slack `#ingestion` |
+| Database connections | >80% of pool | >95% of pool | Slack `#alerts` |
+| Disk/storage usage | >80% | >90% | Slack `#alerts` |
+| Uptime check failure | 1 failure | 3 consecutive | Slack `#alerts` + PagerDuty |
+
+### 8.7 Deployment Topology Diagram
+
+```mermaid
+graph TB
+    subgraph "Users"
+        CUSTOMER["Customer Users<br/>(Browser)"]
+        ADMIN["Admin Users<br/>(Browser)"]
+        PUBLIC["Public Share Viewers<br/>(Browser)"]
+    end
+
+    subgraph "Edge Layer (Vercel)"
+        CDN["Vercel CDN<br/>(Global Edge Network)"]
+        EDGE_MW["Edge Middleware<br/>(Auth, CORS, Rate Limit)"]
+    end
+
+    subgraph "Application Layer (Vercel)"
+        NEXTJS["Next.js 15+<br/>(SSR + API Routes)"]
+        SSE_HANDLER["SSE Route Handler<br/>(/api/v1/events/stream)"]
+    end
+
+    subgraph "Worker Layer (Railway)"
+        SCHEDULER["BullMQ Scheduler<br/>(Cron Jobs)"]
+        INGEST_WORKER["Ingestion Workers<br/>(USPTO data processing)"]
+        PIPELINE_WORKER["Pipeline Workers<br/>(8-step org DAG)"]
+        BULL_BOARD["BullMQ Board<br/>(Job Dashboard)"]
+    end
+
+    subgraph "Data Layer"
+        NEON[("Neon PostgreSQL<br/>(Serverless, RLS)")]
+        UPSTASH[("Upstash Redis<br/>(Cache + Queue + Pub/Sub)")]
+        S3[("AWS S3<br/>(Private Buckets)")]
+    end
+
+    subgraph "External Services"
+        USPTO["USPTO APIs<br/>(PASDL, Bulk, CPC)"]
+        SENTRY_SVC["Sentry<br/>(Error Tracking)"]
+        INFISICAL["Infisical<br/>(Secrets)"]
+        SLACK["Slack<br/>(Alerts)"]
+        BETTER_UPTIME["Better Uptime<br/>(Health Checks)"]
+    end
+
+    CUSTOMER --> CDN
+    ADMIN --> CDN
+    PUBLIC --> CDN
+
+    CDN --> EDGE_MW --> NEXTJS
+    NEXTJS --> NEON
+    NEXTJS --> UPSTASH
+    NEXTJS --> S3
+    NEXTJS --> SSE_HANDLER
+
+    SSE_HANDLER -.->|"subscribe"| UPSTASH
+
+    SCHEDULER --> UPSTASH
+    UPSTASH -->|"consume jobs"| INGEST_WORKER
+    UPSTASH -->|"consume jobs"| PIPELINE_WORKER
+    INGEST_WORKER --> NEON
+    PIPELINE_WORKER --> NEON
+    INGEST_WORKER --> S3
+    INGEST_WORKER -->|"publish events"| UPSTASH
+
+    INGEST_WORKER --> USPTO
+
+    NEXTJS -.-> SENTRY_SVC
+    INGEST_WORKER -.-> SENTRY_SVC
+    PIPELINE_WORKER -.-> SENTRY_SVC
+
+    NEXTJS -.-> INFISICAL
+    INGEST_WORKER -.-> INFISICAL
+
+    INGEST_WORKER -.->|"failure alerts"| SLACK
+    BETTER_UPTIME -->|"health check"| NEXTJS
+
+    style CDN fill:#0070f3,stroke:#333,stroke-width:2px,color:#fff
+    style NEXTJS fill:#0070f3,stroke:#333,stroke-width:2px,color:#fff
+    style INGEST_WORKER fill:#7c3aed,stroke:#333,stroke-width:2px,color:#fff
+    style PIPELINE_WORKER fill:#7c3aed,stroke:#333,stroke-width:2px,color:#fff
+    style NEON fill:#00e699,stroke:#333,stroke-width:2px
+    style UPSTASH fill:#ff4438,stroke:#333,stroke-width:2px,color:#fff
+    style S3 fill:#ff9900,stroke:#333,stroke-width:2px
+```
+
+### 8.8 Infrastructure Cost Estimate (Startup Phase)
+
+| Service | Plan | Estimated Monthly Cost |
+|---------|------|----------------------|
+| Vercel | Pro ($20/seat) | ~$40–60 (2–3 devs) |
+| Railway | Starter ($5/service) | ~$15–25 (3 services) |
+| Neon | Pro ($19/project) | ~$19–40 |
+| Upstash | Pay-as-you-go | ~$10–20 |
+| AWS S3 | Pay-as-you-go | ~$5–15 |
+| Infisical | Team ($8/user) | ~$24 (3 users) |
+| Sentry | Team ($26/mo) | ~$26 |
+| Better Uptime | Free tier | $0 |
+| **Total** | | **~$140–220/mo** |
+
+This compares favorably to an AWS-native deployment (ECS + RDS + ElastiCache) which would typically cost $300–500/mo for equivalent capacity but require significantly more DevOps overhead.
+
+---
+
 ## Cross-References
 
 - **Domain Model:** See `docs/design/01-domain-model.md` for complete schema design, RLS policies, migration path, and business rule preservation matrix.
 - **Stage A Analysis:** See `docs/analysis/07-cross-application-summary.md` for legacy system analysis, all 65 business rules, and 30 security vulnerabilities.
-- **Sections 7–10 (remaining):** Will cover API design, frontend architecture, deployment & infrastructure, and testing strategy.
+- **Sections 9–10 (remaining):** Will cover frontend architecture and testing strategy.
 
 ---
 
-**Document Status:** Sections 1–6 complete  
-**Next:** Part B — Sections 5-9 (Caching, API Design, Frontend, Deployment, Testing)
+**Document Status:** Sections 1–8 complete  
+**Next:** Part B — Sections 9–10 (Frontend Architecture, Testing Strategy)
