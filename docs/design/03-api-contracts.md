@@ -3,9 +3,7 @@
 **Stage B — Architecture Design**  
 **Version:** 1.0  
 **Date:** 2026-02-09  
-**Status:** Draft — Part A (Sections 1–4)
-
-> **⚠️ Part A Only** — This document covers Sections 1 through 4. Sections 5–7 (Organization & Company Endpoints, Admin Endpoints, Share & Integration Endpoints) will be added in a follow-up session.
+**Status:** Complete
 
 ---
 
@@ -15,9 +13,11 @@
 2. [Authentication Endpoints](#2-authentication-endpoints)
 3. [Asset Endpoints](#3-asset-endpoints)
 4. [Dashboard & Events Endpoints](#4-dashboard--events-endpoints)
-5. _(Part B)_ Organization & Company Endpoints
-6. _(Part B)_ Admin Endpoints
-7. _(Part B)_ Share & Integration Endpoints
+5. [Organization & Company Endpoints](#5-organization--company-endpoints)
+6. [Admin Endpoints](#6-admin-endpoints)
+7. [Share & Integration Endpoints](#7-share--integration-endpoints)
+- [Appendix A: Endpoint Summary](#appendix-a-endpoint-summary)
+- [Appendix B: Legacy Endpoint Mapping](#appendix-b-legacy-endpoint-mapping)
 
 ---
 
