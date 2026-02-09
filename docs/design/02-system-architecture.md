@@ -3,9 +3,9 @@
 **Stage B — Architecture Design**  
 **Version:** 1.0  
 **Date:** 2026-02-09  
-**Status:** Draft — Part A (Sections 1–4)
+**Status:** Draft — Sections 1–6
 
-> **⚠️ Part A Only** — This document covers Sections 1 through 4. Sections 5–9 (Caching Strategy, API Design, Frontend Architecture, Deployment & Infrastructure, Testing Strategy) will be added in a follow-up session (Part B).
+> **⚠️ In Progress** — This document covers Sections 1 through 6. Sections 7–9 (Frontend Architecture, Deployment & Infrastructure, Testing Strategy) will be added in a follow-up session.
 
 ---
 
@@ -15,11 +15,12 @@
 2. [Data Flow Redesign](#2-data-flow-redesign)
 3. [Authentication & Authorization Architecture](#3-authentication--authorization-architecture)
 4. [Ingestion Pipeline Architecture](#4-ingestion-pipeline-architecture)
-5. _(Part B)_ Caching & Performance Strategy
-6. _(Part B)_ API Design
-7. _(Part B)_ Frontend Architecture
-8. _(Part B)_ Deployment & Infrastructure
-9. _(Part B)_ Testing Strategy
+5. [Caching Strategy](#5-caching-strategy)
+6. [Real-Time Architecture](#6-real-time-architecture)
+7. _(Part B)_ API Design
+8. _(Part B)_ Frontend Architecture
+9. _(Part B)_ Deployment & Infrastructure
+10. _(Part B)_ Testing Strategy
 
 ---
 
@@ -1176,13 +1177,619 @@ process.on('SIGTERM', async () => {
 
 ---
 
+## 5. Caching Strategy
+
+### 5.1 Problem Statement
+
+The legacy PatenTrack system has **zero caching** — every request hits the database directly. A single dashboard load triggers **10–30 SQL queries** against PostgreSQL, resulting in high latency (p95 > 2s) and unnecessary database load. The rebuilt system introduces a Redis-based caching layer to reduce query volume, improve response times, and provide a foundation for real-time cache invalidation.
+
+### 5.2 Caching Targets
+
+The following data categories are cacheable, each with a specific key pattern, TTL, and invalidation strategy:
+
+| Data | Cache Key Pattern | TTL | Invalidation Trigger |
+|------|-------------------|-----|----------------------|
+| Dashboard summary | `org:{id}:dashboard` | Until invalidated | New assignment ingestion for this org |
+| Ownership tree JSON | `org:{id}:tree:{assetId}` | Until invalidated | New assignment for this org |
+| Patent bibliographic | `patent:{grantNum}:biblio` | 24 hours | Immutable after ingestion |
+| CPC hierarchy | `cpc:{code}:tree` | 30 days | Monthly CPC refresh |
+| Company logo/domain | `company:{name}:logo` | 7 days | Manual refresh |
+| User session | `session:{userId}` | 15 minutes | Logout/revocation |
+| API response | `api:{hash}` | Varies | Varies |
+
+**Key design decisions:**
+
+- **Dashboard and tree data** use event-driven invalidation with no fixed TTL. They are refreshed only when the ingestion pipeline processes new assignments for the relevant org.
+- **Patent bibliographic data** is effectively immutable after initial ingestion and uses a 24-hour TTL as a safety net.
+- **CPC hierarchy** changes monthly and is refreshed on the USPTO CPC update schedule.
+- **User sessions** use a short 15-minute TTL with sliding expiration to support the authentication architecture (see Section 3).
+
+### 5.3 Cache-Aside Pattern
+
+All cached data follows the **cache-aside** (lazy-loading) pattern:
+
+```mermaid
+flowchart TD
+    A[Client Request] --> B{Check Redis Cache}
+    B -->|Cache HIT| C[Return Cached Data]
+    B -->|Cache MISS| D[Query PostgreSQL]
+    D --> E[Store Result in Redis]
+    E --> F[Return Data to Client]
+    
+    style B fill:#f9f,stroke:#333,stroke-width:2px
+    style C fill:#9f9,stroke:#333,stroke-width:2px
+    style D fill:#ff9,stroke:#333,stroke-width:2px
+```
+
+**Implementation:**
+
+```typescript
+// Generic cache-aside helper
+async function cacheAside<T>(
+  redis: Redis,
+  key: string,
+  ttlSeconds: number | null,
+  fetcher: () => Promise<T>,
+): Promise<T> {
+  // 1. Check Redis
+  const cached = await redis.get(key);
+  if (cached !== null) {
+    return JSON.parse(cached) as T;
+  }
+
+  // 2. Cache miss — query source
+  const data = await fetcher();
+
+  // 3. Store in Redis
+  if (ttlSeconds !== null) {
+    await redis.setex(key, ttlSeconds, JSON.stringify(data));
+  } else {
+    // No TTL — invalidated by events only (with max TTL safety net)
+    await redis.setex(key, 86400, JSON.stringify(data)); // 24h fallback TTL safety net
+  }
+
+  return data;
+}
+
+// Usage: Dashboard summary
+async function getDashboardSummary(orgId: string): Promise<DashboardSummary> {
+  return cacheAside(
+    redis,
+    `org:${orgId}:dashboard`,
+    null, // event-driven invalidation
+    () => dashboardRepository.getSummary(orgId),
+  );
+}
+```
+
+### 5.4 Invalidation Strategy
+
+Cache invalidation uses a layered approach combining event-driven invalidation with TTL fallbacks:
+
+**Layer 1 — Event-Driven Invalidation:**
+
+When the ingestion pipeline completes processing for an org, it publishes an event to Redis Pub/Sub. The API server subscribes to these events and invalidates affected caches immediately.
+
+```mermaid
+flowchart LR
+    subgraph "Ingestion Pipeline"
+        W[Worker completes<br/>org processing]
+    end
+    
+    subgraph "Redis"
+        PS[Pub/Sub Channel:<br/>cache:invalidate]
+        CACHE[(Cache Store)]
+    end
+    
+    subgraph "API Server"
+        SUB[Subscriber]
+        DEL[Delete cached keys<br/>for affected org]
+    end
+    
+    W -->|"Publish {orgId, type}"| PS
+    PS -->|"Notify"| SUB
+    SUB --> DEL
+    DEL -->|"DEL org:{id}:*"| CACHE
+    
+    style PS fill:#f96,stroke:#333,stroke-width:2px
+    style CACHE fill:#69f,stroke:#333,stroke-width:2px
+```
+
+**Implementation:**
+
+```typescript
+// Publisher: Called by ingestion worker on completion
+async function publishCacheInvalidation(
+  redis: Redis,
+  orgId: string,
+  type: 'assignment' | 'biblio' | 'cpc',
+): Promise<void> {
+  await redis.publish(
+    'cache:invalidate',
+    JSON.stringify({ orgId, type, timestamp: Date.now() }),
+  );
+}
+
+// Subscriber: Running in API server process
+function subscribeToCacheInvalidation(
+  subscriber: Redis,
+  cache: Redis,
+): void {
+  subscriber.subscribe('cache:invalidate');
+
+  subscriber.on('message', async (_channel: string, message: string) => {
+    const { orgId, type } = JSON.parse(message);
+
+    if (type === 'assignment') {
+      // Invalidate dashboard and tree caches for this org
+      // Use SCAN instead of KEYS to avoid blocking Redis
+      for await (const key of cache.scanStream({ match: `org:${orgId}:*` })) {
+        await cache.del(key);
+      }
+    } else if (type === 'cpc') {
+      // Invalidate all CPC caches
+      for await (const key of cache.scanStream({ match: 'cpc:*' })) {
+        await cache.del(key);
+      }
+    }
+  });
+}
+```
+
+**Layer 2 — Write-Through Invalidation:**
+
+User-initiated mutations (e.g., org settings changes, manual data corrections) invalidate caches immediately on write:
+
+```typescript
+async function updateOrgSettings(
+  orgId: string,
+  settings: OrgSettings,
+): Promise<void> {
+  // 1. Write to PostgreSQL
+  await orgRepository.updateSettings(orgId, settings);
+
+  // 2. Immediately invalidate cache (SCAN to avoid blocking Redis)
+  for await (const key of redis.scanStream({ match: `org:${orgId}:*` })) {
+    await redis.del(key);
+  }
+}
+```
+
+**Layer 3 — TTL Fallback:**
+
+All cached items have a maximum TTL even when using event-driven invalidation, to guard against missed invalidation events:
+
+| Invalidation Type | Max TTL Safety Net |
+|---|---|
+| Event-driven (dashboard, tree) | 24 hours |
+| Immutable (patent biblio) | 24 hours |
+| Scheduled (CPC) | 30 days |
+| Short-lived (sessions) | 15 minutes |
+
+### 5.5 Cache Warming
+
+On API server startup or after a Redis flush, critical caches are pre-warmed:
+
+```typescript
+async function warmCriticalCaches(): Promise<void> {
+  // Warm dashboard caches for active orgs
+  const activeOrgs = await orgRepository.getActiveOrgs();
+
+  for (const org of activeOrgs) {
+    await cacheAside(
+      redis,
+      `org:${org.id}:dashboard`,
+      null,
+      () => dashboardRepository.getSummary(org.id),
+    );
+  }
+
+  logger.info(`Warmed dashboard caches for ${activeOrgs.length} orgs`);
+}
+```
+
+### 5.6 Target Metrics
+
+| Metric | Before (Legacy) | After (Rebuilt) |
+|--------|-----------------|-----------------|
+| Queries per dashboard load | 10–30 SQL queries | 1–3 queries + cache hits |
+| p95 dashboard response | >2,000ms | <200ms |
+| p95 cached endpoint response | N/A | <100ms |
+| Cache hit ratio (dashboard) | 0% | >80% |
+| Database connection pressure | High (every request) | Low (cache misses only) |
+
+### 5.7 Redis Configuration
+
+```yaml
+# Redis cache configuration
+redis:
+  host: ${REDIS_HOST}
+  port: 6379
+  db: 0          # Cache store
+  # db: 1        # BullMQ job queue (separate DB)
+  # db: 2        # Session store (separate DB)
+  maxmemory: 512mb
+  maxmemory-policy: allkeys-lru   # Evict least-recently-used when full
+  
+  # Connection pool
+  pool:
+    min: 5
+    max: 20
+    idleTimeoutMs: 30000
+```
+
+**Redis DB separation:**
+
+| DB | Purpose | Eviction Policy |
+|----|---------|-----------------|
+| 0 | Data cache (dashboard, biblio, CPC) | `allkeys-lru` |
+| 1 | BullMQ job queue | `noeviction` |
+| 2 | Session store | `volatile-ttl` |
+
+This separation ensures that cache eviction under memory pressure does not affect job queue or session data.
+
+---
+
+## 6. Real-Time Architecture
+
+### 6.1 Problem Statement
+
+The legacy system uses two incompatible real-time solutions:
+
+- **PT-API:** Socket.IO with **no authentication** (vulnerability S-16). Any client can connect and receive events for any org.
+- **PT-Admin:** Pusher.js (third-party SaaS) for admin notifications, adding an external dependency and additional cost.
+
+The rebuilt system replaces both with a unified **Server-Sent Events (SSE)** architecture backed by Redis Pub/Sub.
+
+### 6.2 SSE vs. WebSocket — Justification
+
+| Criteria | SSE | WebSocket |
+|----------|-----|-----------|
+| **Direction** | Server → Client (push only) | Bidirectional |
+| **PatenTrack need** | ✅ All real-time needs are server-push | ❌ No client→server real-time needed |
+| **Auto-reconnect** | ✅ Built-in browser support | ❌ Must implement manually |
+| **Proxy compatibility** | ✅ Works through HTTP proxies, CDNs | ⚠️ Requires upgrade negotiation |
+| **Protocol** | HTTP/1.1 or HTTP/2 | Custom ws:// protocol |
+| **Authentication** | ✅ Standard HTTP headers (JWT) | ⚠️ Must pass token in query string or first message |
+| **Complexity** | Low — standard HTTP semantics | Higher — connection lifecycle management |
+| **Scalability (<1000 users)** | ✅ More than sufficient | ❌ Overkill for this scale |
+
+**Decision: SSE** — PatenTrack's real-time requirements are exclusively server→client push (ingestion progress, refresh triggers, notifications). There is no client→server real-time requirement — user actions like comments and settings changes use standard REST endpoints. SSE provides auto-reconnect, works through proxies/CDNs, uses standard HTTP authentication, and is simpler to implement and maintain.
+
+### 6.3 Event Types
+
+| Event | Source | Target | Payload |
+|-------|--------|--------|---------|
+| Ingestion progress | Worker → Redis Pub/Sub → SSE | Admin dashboard | `{jobId, step, progress}` |
+| New assignments | Ingestion completion → SSE | Affected org users | `{orgId, count, refreshNeeded}` |
+| Dashboard refresh | Cache invalidation → SSE | Org viewers | `{orgId, dataType}` |
+| Pipeline completion | Worker → SSE | Admin | `{orgId, status, duration}` |
+
+### 6.4 Architecture Diagram
+
+```mermaid
+flowchart LR
+    subgraph "Background Workers"
+        IW[Ingestion Worker]
+        PW[Pipeline Worker]
+    end
+    
+    subgraph "Redis"
+        PS[Pub/Sub Channels:<br/>events:org:{id}<br/>events:admin]
+    end
+    
+    subgraph "API Server"
+        SSE_H[SSE Handler<br/>GET /api/events/stream]
+        AUTH[JWT Auth Middleware]
+    end
+    
+    subgraph "Browser Clients"
+        ES1[EventSource<br/>Org User A]
+        ES2[EventSource<br/>Org User B]
+        ES3[EventSource<br/>Admin]
+    end
+    
+    IW -->|"Publish progress"| PS
+    PW -->|"Publish completion"| PS
+    PS -->|"Subscribe"| SSE_H
+    AUTH -->|"Validate JWT"| SSE_H
+    SSE_H -->|"Filtered by org"| ES1
+    SSE_H -->|"Filtered by org"| ES2
+    SSE_H -->|"Admin events"| ES3
+    
+    style PS fill:#f96,stroke:#333,stroke-width:2px
+    style SSE_H fill:#69f,stroke:#333,stroke-width:2px
+    style AUTH fill:#9f9,stroke:#333,stroke-width:2px
+```
+
+### 6.5 SSE Endpoint Implementation
+
+**Endpoint:** `GET /api/events/stream`
+
+All connections require a valid JWT (fixing vulnerability S-16 from the legacy system).
+
+```typescript
+import { Router, Request, Response } from 'express';
+
+const router = Router();
+
+// SSE endpoint — requires authentication
+router.get(
+  '/api/events/stream',
+  authenticateJWT, // Middleware validates JWT (see Section 3)
+  async (req: Request, res: Response) => {
+    const userId = req.user!.id;
+    const orgId = req.user!.orgId;
+    const isAdmin = req.user!.role === 'admin';
+
+    // Set SSE headers
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no', // Disable nginx buffering
+    });
+
+    // Send initial connection event
+    res.write(`event: connected\ndata: ${JSON.stringify({ userId, orgId })}\n\n`);
+
+    // Subscribe to org-specific channel
+    const subscriber = redis.duplicate();
+    await subscriber.subscribe(`events:org:${orgId}`);
+
+    // Subscribe to admin channel if admin
+    if (isAdmin) {
+      await subscriber.subscribe('events:admin');
+    }
+
+    // Forward events to SSE stream
+    subscriber.on('message', (channel: string, message: string) => {
+      const event = JSON.parse(message);
+      res.write(`id: ${event.id}\nevent: ${event.type}\ndata: ${JSON.stringify(event.payload)}\n\n`);
+    });
+
+    // Heartbeat every 30 seconds to keep connection alive
+    const heartbeat = setInterval(() => {
+      res.write(': heartbeat\n\n');
+    }, 30_000);
+
+    // Cleanup on disconnect
+    req.on('close', async () => {
+      clearInterval(heartbeat);
+      await subscriber.unsubscribe();
+      await subscriber.quit();
+    });
+  },
+);
+```
+
+### 6.6 Event Publishing (Worker Side)
+
+Workers publish events to Redis Pub/Sub channels:
+
+```typescript
+import { Redis } from 'ioredis';
+import { randomUUID } from 'crypto';
+
+interface SSEEvent {
+  id: string;
+  type: string;
+  payload: Record<string, unknown>;
+}
+
+async function publishEvent(
+  redis: Redis,
+  channel: string,
+  type: string,
+  payload: Record<string, unknown>,
+): Promise<void> {
+  const event: SSEEvent = {
+    id: randomUUID(),
+    type,
+    payload,
+  };
+
+  await redis.publish(channel, JSON.stringify(event));
+}
+
+// Usage in ingestion worker
+async function onIngestionProgress(
+  redis: Redis,
+  orgId: string,
+  jobId: string,
+  step: string,
+  progress: number,
+): Promise<void> {
+  // Send to org-specific channel (for org users)
+  await publishEvent(redis, `events:org:${orgId}`, 'ingestion:progress', {
+    jobId,
+    step,
+    progress,
+  });
+
+  // Send to admin channel
+  await publishEvent(redis, 'events:admin', 'ingestion:progress', {
+    orgId,
+    jobId,
+    step,
+    progress,
+  });
+}
+
+// Usage on pipeline completion
+async function onPipelineComplete(
+  redis: Redis,
+  orgId: string,
+  status: 'success' | 'error',
+  duration: number,
+): Promise<void> {
+  // Notify org users that new data is available
+  await publishEvent(redis, `events:org:${orgId}`, 'assignments:new', {
+    orgId,
+    refreshNeeded: true,
+  });
+
+  // Notify admins of pipeline completion
+  await publishEvent(redis, 'events:admin', 'pipeline:complete', {
+    orgId,
+    status,
+    duration,
+  });
+}
+```
+
+### 6.7 Client-Side Integration
+
+```typescript
+// Browser client — React hook for SSE
+function useSSE(token: string): SSEConnection {
+  const [events, setEvents] = useState<SSEEvent[]>([]);
+  const [connected, setConnected] = useState(false);
+
+  useEffect(() => {
+    // EventSource with auth via custom header (using eventsource polyfill)
+    const es = new EventSourcePolyfill('/api/events/stream', {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    es.addEventListener('connected', () => {
+      setConnected(true);
+    });
+
+    // Auto-reconnect is built into EventSource
+    // Last-Event-ID is sent automatically on reconnect
+    es.addEventListener('ingestion:progress', (e: MessageEvent) => {
+      const data = JSON.parse(e.data);
+      setEvents((prev) => [...prev, { type: 'ingestion:progress', ...data }]);
+    });
+
+    es.addEventListener('assignments:new', (e: MessageEvent) => {
+      const data = JSON.parse(e.data);
+      // Trigger dashboard refresh
+      queryClient.invalidateQueries(['dashboard', data.orgId]);
+    });
+
+    es.addEventListener('dashboard:refresh', (e: MessageEvent) => {
+      const data = JSON.parse(e.data);
+      queryClient.invalidateQueries(['dashboard', data.orgId]);
+    });
+
+    es.onerror = () => {
+      setConnected(false);
+      // EventSource auto-reconnects; no manual intervention needed
+    };
+
+    return () => {
+      es.close();
+    };
+  }, [token]);
+
+  return { events, connected };
+}
+```
+
+### 6.8 Auto-Reconnect & Last-Event-ID
+
+SSE has built-in reconnection support via the `Last-Event-ID` header:
+
+1. Server sends each event with an `id` field.
+2. If the connection drops, the browser automatically reconnects.
+3. On reconnect, the browser sends the `Last-Event-ID` header with the last received event ID.
+4. The server can use this to replay missed events (if buffered in Redis).
+
+```typescript
+// Server-side: Handle reconnection with Last-Event-ID
+router.get(
+  '/api/events/stream',
+  authenticateJWT,
+  async (req: Request, res: Response) => {
+    const lastEventId = req.headers['last-event-id'] as string | undefined;
+
+    if (lastEventId) {
+      // Replay missed events from Redis stream buffer
+      const missedEvents = await getMissedEvents(req.user!.orgId, lastEventId);
+      for (const event of missedEvents) {
+        res.write(
+          `id: ${event.id}\nevent: ${event.type}\ndata: ${JSON.stringify(event.payload)}\n\n`,
+        );
+      }
+    }
+
+    // Continue with live event stream...
+  },
+);
+```
+
+### 6.9 Security Considerations
+
+| Concern | Mitigation |
+|---------|------------|
+| Unauthenticated connections (S-16) | All SSE connections require valid JWT |
+| Cross-org data leakage | Events filtered by org from JWT claims |
+| Connection flooding | Rate limiting on SSE endpoint (max 2 connections per user) |
+| Token expiration during stream | Heartbeat checks token validity; close on expiry |
+| Event injection | Workers are the only publishers; no client→server channel |
+
+### 6.10 Integration with Caching (Section 5)
+
+The real-time architecture integrates directly with the caching strategy:
+
+```mermaid
+flowchart TD
+    subgraph "Ingestion Pipeline"
+        W[Worker completes<br/>org processing]
+    end
+    
+    subgraph "Redis"
+        PS[Pub/Sub]
+        CACHE[(Cache Store)]
+    end
+    
+    subgraph "API Server"
+        INV[Cache Invalidator]
+        SSE[SSE Handler]
+    end
+    
+    subgraph "Browser"
+        ES[EventSource Client]
+        UI[Dashboard UI]
+    end
+    
+    W -->|"1. Publish completion"| PS
+    PS -->|"2a. Invalidate cache"| INV
+    INV -->|"DEL org:{id}:*"| CACHE
+    PS -->|"2b. Push event"| SSE
+    SSE -->|"3. SSE: assignments:new"| ES
+    ES -->|"4. Trigger refresh"| UI
+    UI -->|"5. Fetch (cache miss → fresh data)"| CACHE
+    
+    style PS fill:#f96,stroke:#333,stroke-width:2px
+    style CACHE fill:#69f,stroke:#333,stroke-width:2px
+    style SSE fill:#9f9,stroke:#333,stroke-width:2px
+```
+
+**Flow:**
+1. Ingestion worker completes processing for an org.
+2. Redis Pub/Sub triggers two parallel actions:
+   - **2a.** Cache invalidator deletes stale cached data for the org.
+   - **2b.** SSE handler pushes a `assignments:new` event to connected clients.
+3. Browser receives the SSE event.
+4. Client-side code triggers a dashboard data refresh (e.g., React Query `invalidateQueries`).
+5. The refresh request hits a cache miss (because cache was just invalidated), fetches fresh data from PostgreSQL, and populates the cache.
+
+This ensures users see fresh data immediately after ingestion without polling, and the cache is always consistent with the database.
+
+---
+
 ## Cross-References
 
 - **Domain Model:** See `docs/design/01-domain-model.md` for complete schema design, RLS policies, migration path, and business rule preservation matrix.
 - **Stage A Analysis:** See `docs/analysis/07-cross-application-summary.md` for legacy system analysis, all 65 business rules, and 30 security vulnerabilities.
-- **Part B (Sections 5-9):** Will cover caching strategy, API design, frontend architecture, deployment & infrastructure, and testing strategy.
+- **Sections 7–10 (remaining):** Will cover API design, frontend architecture, deployment & infrastructure, and testing strategy.
 
 ---
 
-**Document Status:** Part A complete (Sections 1-4)  
+**Document Status:** Sections 1–6 complete  
 **Next:** Part B — Sections 5-9 (Caching, API Design, Frontend, Deployment, Testing)
