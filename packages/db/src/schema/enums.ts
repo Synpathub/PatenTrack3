@@ -81,3 +81,4 @@ export const maintenanceFeeStatusEnum = pgEnum('maintenance_fee_status', [
   'expired',
   'unknown',
 ]);
+// Schema validated against Neon PostgreSQL 17 - Feb 2026
