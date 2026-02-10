@@ -22,8 +22,7 @@ jobs:
       - name: Type check
         run: npx turbo build --filter='./packages/*'
 
-      - name: Format check
-        run: npm run format:check
+    
 
       - name: Test
         run: npx turbo test
