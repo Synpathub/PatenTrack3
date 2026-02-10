@@ -1,8 +1,8 @@
 import {
   pgTable, uuid, text, timestamp, integer, jsonb, index,
 } from 'drizzle-orm/pg-core';
-import { ingestionSourceEnum, jobStatusEnum, pipelineStepEnum } from './enums.js';
-import { organizations } from './organizations.js';
+import { ingestionSourceEnum, jobStatusEnum, pipelineStepEnum } from './enums';
+import { organizations } from './organizations';
 
 // =============================================================================
 // Ingestion Runs (Stage 1 — source ingestion tracking)

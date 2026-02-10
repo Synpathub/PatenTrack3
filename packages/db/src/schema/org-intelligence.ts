@@ -1,10 +1,10 @@
 import {
   pgTable, uuid, text, timestamp, boolean, integer, jsonb, index, uniqueIndex,
 } from 'drizzle-orm/pg-core';
-import { conveyanceTypeEnum, dashboardTabEnum } from './enums.js';
-import { organizations } from './organizations.js';
-import { patents } from './patents.js';
-import { assignments } from './assignments.js';
+import { conveyanceTypeEnum, dashboardTabEnum } from './enums';
+import { organizations } from './organizations';
+import { patents } from './patents';
+import { assignments } from './assignments';
 
 // =============================================================================
 // Org Assets (which patents an org monitors)

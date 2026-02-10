@@ -1,8 +1,8 @@
 import {
   pgTable, uuid, text, timestamp, boolean, index, uniqueIndex,
 } from 'drizzle-orm/pg-core';
-import { userRoleEnum, hashAlgorithmEnum, oauthProviderEnum } from './enums.js';
-import { organizations } from './organizations.js';
+import { userRoleEnum, hashAlgorithmEnum, oauthProviderEnum } from './enums';
+import { organizations } from './organizations';
 
 // =============================================================================
 // Users

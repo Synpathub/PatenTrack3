@@ -1,14 +1,14 @@
 // Enums
-export * from './enums.js';
+export * from './enums';
 
 // Tables
-export * from './organizations.js';
-export * from './users.js';
-export * from './patents.js';
-export * from './assignments.js';
-export * from './org-intelligence.js';
-export * from './shares.js';
-export * from './ingestion.js';
+export * from './organizations';
+export * from './users';
+export * from './patents';
+export * from './assignments';
+export * from './org-intelligence';
+export * from './shares';
+export * from './ingestion';
 
 // Relations
-export * from './relations.js';
+export * from './relations';

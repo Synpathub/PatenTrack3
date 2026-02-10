@@ -1,7 +1,7 @@
 import {
   pgTable, uuid, text, timestamp, integer, boolean, index, uniqueIndex,
 } from 'drizzle-orm/pg-core';
-import { documentTypeEnum, maintenanceFeeStatusEnum } from './enums.js';
+import { documentTypeEnum, maintenanceFeeStatusEnum } from './enums';
 
 // =============================================================================
 // Patents (global — not org-specific)

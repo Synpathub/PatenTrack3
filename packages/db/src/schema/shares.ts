@@ -1,8 +1,8 @@
 import {
   pgTable, uuid, text, timestamp, integer, boolean, jsonb, index,
 } from 'drizzle-orm/pg-core';
-import { organizations } from './organizations.js';
-import { users } from './users.js';
+import { organizations } from './organizations';
+import { users } from './users';
 
 // =============================================================================
 // Share Links (BR-044, BR-045, BR-046, BR-047)

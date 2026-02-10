@@ -1,5 +1,5 @@
 import { pgTable, uuid, text, timestamp, jsonb, index } from 'drizzle-orm/pg-core';
-import { orgStatusEnum, environmentModeEnum } from './enums.js';
+import { orgStatusEnum, environmentModeEnum } from './enums';
 
 // =============================================================================
 // Organizations

@@ -1,14 +1,14 @@
 import { relations } from 'drizzle-orm';
-import { organizations } from './organizations.js';
-import { users, refreshTokens, oauthAccounts, verificationCodes } from './users.js';
-import { patents, patentInventors, patentClassifications, patentFamilies, maintenanceFeeEvents } from './patents.js';
-import { assignments, assignmentAssignors, assignmentAssignees, assignmentDocuments } from './assignments.js';
+import { organizations } from './organizations';
+import { users, refreshTokens, oauthAccounts, verificationCodes } from './users';
+import { patents, patentInventors, patentClassifications, patentFamilies, maintenanceFeeEvents } from './patents';
+import { assignments, assignmentAssignors, assignmentAssignees, assignmentDocuments } from './assignments';
 import {
   orgAssets, orgAssignments, entities, entityAliases, companies,
   dashboardItems, summaryMetrics, timelineEntries,
-} from './org-intelligence.js';
-import { shareLinks, shareAccessLog } from './shares.js';
-import { pipelineRuns } from './ingestion.js';
+} from './org-intelligence';
+import { shareLinks, shareAccessLog } from './shares';
+import { pipelineRuns } from './ingestion';
 
 // =============================================================================
 // Organization Relations
