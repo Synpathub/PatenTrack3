@@ -1,20 +1,19 @@
 {
   "name": "@patentrack/business-rules",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "private": true,
-  "type": "module",
-  "exports": {
-    ".": "./src/index.ts",
-    "./*": "./src/*.ts"
-  },
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
   "scripts": {
-    "build": "tsc",
     "test": "vitest run",
     "test:watch": "vitest",
-    "clean": "rm -rf dist .turbo"
+    "test:coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@patentrack/shared": "*"
   },
   "devDependencies": {
-    "typescript": "^5.7.0",
-    "vitest": "^3.0.0"
+    "vitest": "^3.0.0",
+    "typescript": "^5.7.0"
   }
 }
