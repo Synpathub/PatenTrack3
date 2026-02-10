@@ -17,7 +17,7 @@ jobs:
           node-version: '22'
           cache: 'npm'
 
-      - run: npm ci
+      - run: npm install
 
       - name: Type check
         run: npx turbo build --filter='./packages/*'
@@ -39,7 +39,7 @@ jobs:
           node-version: '22'
           cache: 'npm'
 
-      - run: npm ci
+      - run: npm install
 
       - name: Build
         run: npx turbo build
