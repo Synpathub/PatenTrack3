@@ -61,13 +61,13 @@ export function classifyBatch(
 }
 
 export function isOwnershipTransfer(conveyType: ConveyanceType): boolean {
-  return [
+  return ([
     CONVEYANCE_TYPES.ASSIGNMENT,
     CONVEYANCE_TYPES.EMPLOYEE,
     CONVEYANCE_TYPES.MERGER,
     CONVEYANCE_TYPES.GOVERN,
     CONVEYANCE_TYPES.CORRECT,
-  ].includes(conveyType);
+  ] as ConveyanceType[]).includes(conveyType);
 }
 
 export function isEncumbrance(conveyType: ConveyanceType): boolean {
