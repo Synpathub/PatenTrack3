@@ -1,0 +1,17 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src",
+    "paths": {
+      "@patentrack/db": ["../../packages/db/src"],
+      "@patentrack/db/*": ["../../packages/db/src/*"],
+      "@patentrack/shared": ["../../packages/shared/src"],
+      "@patentrack/shared/*": ["../../packages/shared/src/*"],
+      "@patentrack/business-rules": ["../../packages/business-rules/src"],
+      "@patentrack/business-rules/*": ["../../packages/business-rules/src/*"]
+    }
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}

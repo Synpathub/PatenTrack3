@@ -1,0 +1,25 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "jsx": "preserve",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowJs": true,
+    "incremental": true,
+    "plugins": [{ "name": "next" }],
+    "paths": {
+      "@/*": ["./src/*"],
+      "@patentrack/db": ["../../packages/db/src"],
+      "@patentrack/db/*": ["../../packages/db/src/*"],
+      "@patentrack/shared": ["../../packages/shared/src"],
+      "@patentrack/shared/*": ["../../packages/shared/src/*"],
+      "@patentrack/ui": ["../../packages/ui/src"],
+      "@patentrack/ui/*": ["../../packages/ui/src/*"],
+      "@patentrack/business-rules": ["../../packages/business-rules/src"],
+      "@patentrack/business-rules/*": ["../../packages/business-rules/src/*"]
+    }
+  },
+  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
+  "exclude": ["node_modules"]
+}
