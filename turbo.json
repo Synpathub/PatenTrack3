@@ -1,12 +1,17 @@
 {
-  "$schema": "https://turbo.build/schema.json",
-  "globalDependencies": ["**/.env.*local"],
+  "$schema": "https://turborepo.dev/schema.json",
   "globalEnv": [
-    "NODE_ENV",
     "DATABASE_URL",
     "REDIS_URL",
-    "JWT_SECRET",
-    "JWT_REFRESH_SECRET"
+    "NODE_ENV",
+    "NEXTAUTH_SECRET",
+    "NEXTAUTH_URL",
+    "UPSTASH_REDIS_REST_URL",
+    "UPSTASH_REDIS_REST_TOKEN",
+    "GOOGLE_CLIENT_ID",
+    "GOOGLE_CLIENT_SECRET",
+    "MICROSOFT_CLIENT_ID",
+    "MICROSOFT_CLIENT_SECRET"
   ],
   "tasks": {
     "build": {
@@ -23,24 +28,7 @@
     "test": {
       "dependsOn": ["^build"]
     },
-    "test:watch": {
-      "cache": false,
-      "persistent": true
-    },
-    "db:generate": {
-      "cache": false
-    },
-    "db:migrate": {
-      "cache": false
-    },
     "db:push": {
-      "cache": false
-    },
-    "db:studio": {
-      "cache": false,
-      "persistent": true
-    },
-    "clean": {
       "cache": false
     }
   }
