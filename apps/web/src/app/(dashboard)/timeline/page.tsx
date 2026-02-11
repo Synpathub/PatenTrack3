@@ -42,11 +42,15 @@ function TypeBadge({ type }: { type: string }) {
 
 function TimelineEntryCard({ entry }: { entry: TimelineEntry }) {
   const date = new Date(entry.entryDate);
-  const formattedDate = date.toLocaleDateString("en-US", {
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  });
+  const isValidDate = !isNaN(date.getTime());
+  
+  const formattedDate = isValidDate
+    ? date.toLocaleDateString("en-US", {
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+      })
+    : "Invalid date";
 
   return (
     <div className="relative border-l-2 border-gray-200 pl-6 pb-8 last:pb-0">

@@ -3,7 +3,7 @@ import { auth } from "@/lib/auth";
 import { db, schema } from "@/lib/db";
 import { eq, desc } from "drizzle-orm";
 
-export async function GET(request: Request) {
+export async function GET() {
   const session = await auth();
   if (!session?.user) {
     return NextResponse.json(
