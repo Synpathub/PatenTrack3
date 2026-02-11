@@ -32,7 +32,7 @@ export async function GET(request: Request) {
   } catch (error) {
     console.error("Timeline fetch error:", error);
     return NextResponse.json(
-      { error: "Failed to fetch timeline entries" },
+      { error: { code: "INTERNAL_ERROR", message: "Failed to fetch timeline entries" } },
       { status: 500 }
     );
   }

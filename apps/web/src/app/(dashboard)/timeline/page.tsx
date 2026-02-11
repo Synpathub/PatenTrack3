@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 
 interface TimelineEntry {
   id: string;
-  entryDate: string;
+  entryDate: string; // ISO 8601 timestamp from database
   assignmentCount: number;
   types: string[] | null;
   createdAt: string;
