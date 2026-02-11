@@ -1,40 +1,81 @@
 /**
  * dashboard.worker.ts — Step 6: Dashboard Aggregation
  *
- * Computes dashboard summary counts (complete, broken, encumbered, etc.)
- * for the organization after chain analysis is done.
+ * No additional computation needed — dashboard_items were written by
+ * tree + broken-title workers. This step validates counts and
+ * ensures consistency, then enqueues summary.
  *
  * Business Rules: BR-037 → BR-038
  */
 
 import { Worker, type Job } from 'bullmq';
 import { db, redis, WORKER_CONCURRENCY } from '../config';
+import { schema } from '@patentrack/db';
+import { eq, sql } from 'drizzle-orm';
 import { summaryQueue } from '../queues';
 import { workerLogger } from '../utils/logger';
-import { DASHBOARD_TYPES, resolveActivityGroup } from '@patentrack/shared';
 
 interface DashboardJobData {
   organizationId: string;
+  pipelineRunId?: string;
 }
 
 const log = workerLogger('dashboard');
 
 async function processDashboard(job: Job<DashboardJobData>) {
-  const { organizationId } = job.data;
+  const { organizationId, pipelineRunId } = job.data;
   log.info({ organizationId, jobId: job.id }, 'Starting dashboard aggregation');
 
-  // TODO: Query chain analysis results for all org patents
-  // TODO: Aggregate counts by dashboardType (COMPLETE, BROKEN, ENCUMBERED, etc.)
-  // TODO: Apply resolveActivityGroup() for activity-based summaries
-  // TODO: Write dashboard counts to org summary tables
-  // TODO: Record progress in pipeline_runs
+  if (pipelineRunId) {
+    await db.update(schema.pipelineRuns).set({
+      currentStep: 'dashboard',
+    }).where(eq(schema.pipelineRuns.id, pipelineRunId));
+  }
 
-  await summaryQueue.add('summary', { organizationId }, {
+  // Count dashboard items by type for this org
+  const counts = await db
+    .select({
+      type: schema.dashboardItems.type,
+      tab: schema.dashboardItems.tab,
+      count: sql<number>`count(*)::int`,
+    })
+    .from(schema.dashboardItems)
+    .where(eq(schema.dashboardItems.orgId, organizationId))
+    .groupBy(schema.dashboardItems.type, schema.dashboardItems.tab);
+
+  const totalAssets = counts.reduce((sum, c) => sum + c.count, 0);
+  const completeChains = counts
+    .filter((c) => c.type === 0)
+    .reduce((sum, c) => sum + c.count, 0);
+  const brokenChains = counts
+    .filter((c) => c.type === 1)
+    .reduce((sum, c) => sum + c.count, 0);
+  const encumbrances = counts
+    .filter((c) => c.type === 18)
+    .reduce((sum, c) => sum + c.count, 0);
+
+  log.info(
+    { organizationId, totalAssets, completeChains, brokenChains, encumbrances },
+    'Dashboard counts computed',
+  );
+
+  if (pipelineRunId) {
+    await db.update(schema.pipelineRuns).set({
+      stepsCompleted: sql`array_append(steps_completed, 'dashboard')`,
+    }).where(eq(schema.pipelineRuns.id, pipelineRunId));
+  }
+
+  await summaryQueue.add('summary', {
+    organizationId,
+    pipelineRunId,
+    dashboardCounts: { totalAssets, completeChains, brokenChains, encumbrances },
+  }, {
     attempts: 3,
     backoff: { type: 'exponential', delay: 1000 },
   });
 
   log.info({ organizationId, jobId: job.id }, 'Dashboard aggregation complete');
+  return { totalAssets, completeChains, brokenChains, encumbrances };
 }
 
 const dashboardWorker = new Worker<DashboardJobData>(

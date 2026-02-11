@@ -1,7 +1,7 @@
 /**
  * classify.worker.ts — Step 1: Transaction Type Classification
  *
- * Reads unclassified assignments, applies classifyConveyance() from
+ * Reads unclassified org_assignments, applies classifyConveyance() from
  * business-rules, writes results, then enqueues the flag step.
  *
  * Business Rules: BR-001 → BR-012
@@ -10,41 +10,85 @@
 import { Worker, type Job } from 'bullmq';
 import { classifyConveyance } from '@patentrack/business-rules';
 import { db, redis, WORKER_CONCURRENCY } from '../config';
+import { schema } from '@patentrack/db';
+import { eq, and, isNull } from 'drizzle-orm';
 import { flagQueue } from '../queues';
 import { workerLogger } from '../utils/logger';
 
 interface ClassifyJobData {
   organizationId: string;
+  pipelineRunId?: string;
 }
 
 const log = workerLogger('classify');
 
 async function processClassify(job: Job<ClassifyJobData>) {
-  const { organizationId } = job.data;
+  const { organizationId, pipelineRunId } = job.data;
   log.info({ organizationId, jobId: job.id }, 'Starting classification');
 
-  // TODO: Query unclassified assignments for this org's patents
-  // const assignments = await db.select()...
+  // Update pipeline run status
+  if (pipelineRunId) {
+    await db.update(schema.pipelineRuns).set({
+      currentStep: 'classify',
+      status: 'active',
+      startedAt: new Date(),
+    }).where(eq(schema.pipelineRuns.id, pipelineRunId));
+  }
 
-  // TODO: Apply classifyConveyance() to each record
-  // const results = assignments.map(a => ({
-  //   rfId: a.rfId,
-  //   ...classifyConveyance(a.conveyanceText),
-  // }));
+  // Query unclassified org_assignments for this org
+  const unclassified = await db
+    .select({
+      orgAssignmentId: schema.orgAssignments.id,
+      assignmentId: schema.orgAssignments.assignmentId,
+      conveyanceText: schema.assignments.conveyanceText,
+    })
+    .from(schema.orgAssignments)
+    .innerJoin(
+      schema.assignments,
+      eq(schema.orgAssignments.assignmentId, schema.assignments.id),
+    )
+    .where(
+      and(
+        eq(schema.orgAssignments.orgId, organizationId),
+        isNull(schema.orgAssignments.conveyanceType),
+      ),
+    );
 
-  // TODO: Write classification results to org_assignments table
-  // await db.update(...)
+  log.info({ organizationId, count: unclassified.length }, 'Found unclassified assignments');
 
-  // TODO: Record progress in pipeline_runs table
-  // await db.insert(pipelineRuns).values({ ... })
+  // Apply classifyConveyance() to each record and update
+  let classified = 0;
+  for (const row of unclassified) {
+    const result = classifyConveyance(row.conveyanceText);
+
+    await db.update(schema.orgAssignments).set({
+      conveyanceType: result.conveyType,
+      isEmployerAssignment: result.employerAssign,
+      classifiedAt: new Date(),
+      updatedAt: new Date(),
+    }).where(eq(schema.orgAssignments.id, row.orgAssignmentId));
+
+    classified++;
+    if (classified % 100 === 0) {
+      await job.updateProgress(Math.round((classified / unclassified.length) * 100));
+    }
+  }
+
+  // Update pipeline run
+  if (pipelineRunId) {
+    await db.update(schema.pipelineRuns).set({
+      stepsCompleted: ['classify'],
+    }).where(eq(schema.pipelineRuns.id, pipelineRunId));
+  }
 
   // Enqueue next pipeline step
-  await flagQueue.add('flag', { organizationId }, {
+  await flagQueue.add('flag', { organizationId, pipelineRunId }, {
     attempts: 3,
     backoff: { type: 'exponential', delay: 1000 },
   });
 
-  log.info({ organizationId, jobId: job.id }, 'Classification complete');
+  log.info({ organizationId, classified, jobId: job.id }, 'Classification complete');
+  return { classified };
 }
 
 const classifyWorker = new Worker<ClassifyJobData>(
