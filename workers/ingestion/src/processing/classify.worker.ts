@@ -8,9 +8,9 @@
  */
 
 import { Worker, type Job } from 'bullmq';
-import { classifyConveyance } from '@patentrack/business-rules';
+import { classifyConveyance } from '../../../../packages/business-rules/src/index';
 import { db, redis, WORKER_CONCURRENCY } from '../config';
-import { schema } from '@patentrack/db';
+import { schema } from '../../../../packages/db/src/index';
 import { eq, and, isNull } from 'drizzle-orm';
 import { flagQueue } from '../queues';
 import { workerLogger } from '../utils/logger';
@@ -92,7 +92,7 @@ async function processClassify(job: Job<ClassifyJobData>) {
 }
 
 const classifyWorker = new Worker<ClassifyJobData>(
-  'patentrack:classify',
+  'patentrack-classify',
   processClassify,
   {
     connection: redis,

@@ -12,7 +12,7 @@
 
 import { Worker, type Job } from 'bullmq';
 import { db, redis, WORKER_CONCURRENCY } from '../config';
-import { schema } from '@patentrack/db';
+import { schema } from '../../../../packages/db/src/index';
 import { eq, sql } from 'drizzle-orm';
 import { workerLogger } from '../utils/logger';
 
@@ -98,7 +98,7 @@ async function processGenerateJson(job: Job<GenerateJsonJobData>) {
 }
 
 const generateJsonWorker = new Worker<GenerateJsonJobData>(
-  'patentrack:generate-json',
+  'patentrack-generate-json',
   processGenerateJson,
   {
     connection: redis,

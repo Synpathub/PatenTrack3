@@ -8,15 +8,15 @@
  */
 
 import { Worker, type Job } from 'bullmq';
-import { isOwnershipTransfer, isEncumbrance, isRelease } from '@patentrack/business-rules';
+import { isOwnershipTransfer, isEncumbrance, isRelease } from '../../../../packages/business-rules/src/index';
 import { db, redis, WORKER_CONCURRENCY } from '../config';
-import { schema } from '@patentrack/db';
+import { schema } from '../../../../packages/db/src/index';
 import { eq, and, asc, sql } from 'drizzle-orm';
 import {
   TREE_NODE_TYPES,
   CONVEYANCE_TYPES,
   getConveyanceColor,
-} from '@patentrack/shared';
+} from '../../../../packages/shared/src/index';
 import { timelineQueue } from '../queues';
 import { workerLogger } from '../utils/logger';
 
@@ -190,7 +190,7 @@ async function processTree(job: Job<TreeJobData>) {
 }
 
 const treeWorker = new Worker<TreeJobData>(
-  'patentrack:tree',
+  'patentrack-tree',
   processTree,
   {
     connection: redis,

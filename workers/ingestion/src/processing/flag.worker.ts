@@ -8,9 +8,9 @@
  */
 
 import { Worker, type Job } from 'bullmq';
-import { matchInventorsToAssignment, normalizeName } from '@patentrack/business-rules';
+import { matchInventorsToAssignment, normalizeName } from '../../../../packages/business-rules/src/index';
 import { db, redis, WORKER_CONCURRENCY } from '../config';
-import { schema } from '@patentrack/db';
+import { schema } from '../../../../packages/db/src/index';
 import { eq, and, sql } from 'drizzle-orm';
 import { treeQueue } from '../queues';
 import { workerLogger } from '../utils/logger';
@@ -113,7 +113,7 @@ async function processFlag(job: Job<FlagJobData>) {
 }
 
 const flagWorker = new Worker<FlagJobData>(
-  'patentrack:flag',
+  'patentrack-flag',
   processFlag,
   {
     connection: redis,

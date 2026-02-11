@@ -10,7 +10,7 @@
 
 import { Worker, type Job } from 'bullmq';
 import { db, redis, WORKER_CONCURRENCY } from '../config';
-import { schema } from '@patentrack/db';
+import { schema } from '../../../../packages/db/src/index';
 import { eq, sql } from 'drizzle-orm';
 import { summaryQueue } from '../queues';
 import { workerLogger } from '../utils/logger';
@@ -79,7 +79,7 @@ async function processDashboard(job: Job<DashboardJobData>) {
 }
 
 const dashboardWorker = new Worker<DashboardJobData>(
-  'patentrack:dashboard',
+  'patentrack-dashboard',
   processDashboard,
   {
     connection: redis,

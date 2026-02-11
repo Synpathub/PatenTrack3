@@ -10,11 +10,11 @@
  */
 
 import { Worker, type Job } from 'bullmq';
-import { analyzeChain, type ChainTransaction } from '@patentrack/business-rules';
+import { analyzeChain, type ChainTransaction } from '../../../../packages/business-rules/src/index';
 import { db, redis, WORKER_CONCURRENCY } from '../config';
-import { schema } from '@patentrack/db';
+import { schema } from '../../../../packages/db/src/index';
 import { eq, and, asc, sql } from 'drizzle-orm';
-import { DASHBOARD_TYPES } from '@patentrack/shared';
+import { DASHBOARD_TYPES } from '../../../../packages/shared/src/index';
 import { dashboardQueue } from '../queues';
 import { workerLogger } from '../utils/logger';
 
@@ -170,7 +170,7 @@ async function processBrokenTitle(job: Job<BrokenTitleJobData>) {
 }
 
 const brokenTitleWorker = new Worker<BrokenTitleJobData>(
-  'patentrack:broken-title',
+  'patentrack-broken-title',
   processBrokenTitle,
   {
     connection: redis,

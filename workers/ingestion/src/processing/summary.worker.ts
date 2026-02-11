@@ -9,9 +9,9 @@
  */
 
 import { Worker, type Job } from 'bullmq';
-import { groupEntities, normalizeName } from '@patentrack/business-rules';
+import { groupEntities, normalizeName } from '../../../../packages/business-rules/src/index';
 import { db, redis, WORKER_CONCURRENCY } from '../config';
-import { schema } from '@patentrack/db';
+import { schema } from '../../../../packages/db/src/index';
 import { eq, sql } from 'drizzle-orm';
 import { generateJsonQueue } from '../queues';
 import { workerLogger } from '../utils/logger';
@@ -172,7 +172,7 @@ async function processSummary(job: Job<SummaryJobData>) {
 }
 
 const summaryWorker = new Worker<SummaryJobData>(
-  'patentrack:summary',
+  'patentrack-summary',
   processSummary,
   {
     connection: redis,
