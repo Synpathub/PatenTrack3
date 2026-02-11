@@ -1,4 +1,5 @@
 import NextAuth from "next-auth";
+import type { NextAuthResult } from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import Google from "next-auth/providers/google";
 import MicrosoftEntraID from "next-auth/providers/microsoft-entra-id";
@@ -33,7 +34,7 @@ declare module "@auth/core/jwt" {
   }
 }
 
-export const { handlers, auth, signIn, signOut } = NextAuth({
+const result: NextAuthResult = NextAuth({
   ...authConfig,
   providers: [
     Credentials({
@@ -93,3 +94,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     },
   },
 });
+
+export const handlers = result.handlers;
+export const auth = result.auth;
+export const signIn = result.signIn;
+export const signOut = result.signOut;
