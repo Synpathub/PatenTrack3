@@ -1,5 +1,6 @@
-import { auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
+import { auth } from "@/lib/auth";
+import { LogoutButton } from "@/components/logout-button";
 
 export default async function DashboardLayout({
   children,
@@ -7,28 +8,28 @@ export default async function DashboardLayout({
   children: React.ReactNode;
 }) {
   const session = await auth();
-  if (!session?.user) redirect("/login");
+
+  if (!session?.user) {
+    redirect("/login");
+  }
 
   return (
     <div className="min-h-screen bg-gray-50" style={{ colorScheme: "light" }}>
-      {/* Top Nav */}
-      <header className="border-b border-gray-200 bg-white px-6 py-3">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <h1 className="text-lg font-bold text-gray-900">PatenTrack</h1>
-            <span className="rounded bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700">
-              Portfolio Oversight
-            </span>
+      <header className="sticky top-0 z-30 border-b border-gray-200 bg-white">
+        <div className="mx-auto flex h-14 max-w-7xl items-center justify-between px-4 sm:px-6">
+          <div className="flex items-center gap-3">
+            <a href="/" className="text-lg font-semibold text-gray-900 hover:text-gray-700 transition-colors">
+              PatenTrack
+            </a>
+            <span className="hidden sm:inline text-xs text-gray-400">Patent Portfolio Oversight</span>
           </div>
           <div className="flex items-center gap-4">
-            <span className="text-sm text-gray-600">{session.user.name}</span>
-            <span className="rounded bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">
-              {session.user.role}
-            </span>
+            <span className="hidden sm:inline text-sm text-gray-600">{session.user.email}</span>
+            <LogoutButton />
           </div>
         </div>
       </header>
-      <main className="p-6">{children}</main>
+      <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6">{children}</main>
     </div>
   );
 }
