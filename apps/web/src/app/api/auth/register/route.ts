@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { db, schema } from "@/lib/db";
 import { hashPassword, findUserByEmail } from "@/lib/auth-helpers";
+import { isNotNull } from "drizzle-orm";
 
 export async function POST(request: Request) {
   try {
@@ -22,8 +23,13 @@ export async function POST(request: Request) {
       );
     }
 
-    const existingUsers = await db.select().from(schema.users).limit(1);
-    const isBootstrap = existingUsers.length === 0;
+    // Bootstrap: check for users with credentials (not just any users from seed data)
+    const usersWithCredentials = await db
+      .select({ id: schema.users.id })
+      .from(schema.users)
+      .where(isNotNull(schema.users.passwordHash))
+      .limit(1);
+    const isBootstrap = usersWithCredentials.length === 0;
 
     if (!isBootstrap) {
       const session = await auth();
@@ -57,14 +63,23 @@ export async function POST(request: Request) {
     if (isBootstrap) {
       userRole = "super_admin";
       if (!userOrgId) {
-        const [org] = await db
-          .insert(schema.organizations)
-          .values({
-            name: "PatenTrack",
-            slug: "patentrack",
-          })
-          .returning();
-        userOrgId = org.id;
+        // Use existing org if one exists, otherwise create one
+        const [existingOrg] = await db
+          .select({ id: schema.organizations.id })
+          .from(schema.organizations)
+          .limit(1);
+        if (existingOrg) {
+          userOrgId = existingOrg.id;
+        } else {
+          const [org] = await db
+            .insert(schema.organizations)
+            .values({
+              name: "PatenTrack",
+              slug: "patentrack",
+            })
+            .returning();
+          userOrgId = org.id;
+        }
       }
     } else {
       const session = await auth();

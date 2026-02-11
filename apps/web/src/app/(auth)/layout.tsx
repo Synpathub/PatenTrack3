@@ -3,5 +3,9 @@ export default function AuthLayout({
 }: {
   children: React.ReactNode;
 }) {
-  return <>{children}</>;
+  return (
+    <div className="bg-gray-50 text-gray-900" style={{ colorScheme: "light" }}>
+      {children}
+    </div>
+  );
 }
