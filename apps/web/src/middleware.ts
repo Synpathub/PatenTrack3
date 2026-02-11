@@ -1,6 +1,7 @@
 import NextAuth from "next-auth";
 import { authConfig } from "@/lib/auth.config";
 import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
 
 const { auth } = NextAuth(authConfig);
 
@@ -28,7 +29,7 @@ export default auth((req) => {
   }
 
   return NextResponse.next();
-});
+}) as (req: NextRequest) => Promise<NextResponse>;
 
 export const config = {
   matcher: ["/((?!_next/static|_next/image|favicon.ico|public/).*)"],
