@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 
 interface SummaryMetrics {
   totalAssets: number;
@@ -84,6 +85,7 @@ function FeeBadge({ status }: { status: string }) {
 }
 
 export default function DashboardPage() {
+  const router = useRouter();
   const [metrics, setMetrics] = useState<SummaryMetrics | null>(null);
   const [patents, setPatents] = useState<Patent[]>([]);
   const [dashItems, setDashItems] = useState<DashboardItem[]>([]);
@@ -187,7 +189,11 @@ export default function DashboardPage() {
               .map((patent) => {
                 const dashItem = assetStatusMap.get(patent.assetId);
                 return (
-                  <tr key={patent.id} className="hover:bg-gray-50">
+                  <tr 
+                    key={patent.id} 
+                    className="hover:bg-gray-50 cursor-pointer"
+                    onClick={() => router.push(`/patents/${patent.id}`)}
+                  >
                     <td className="whitespace-nowrap px-4 py-3 text-sm font-medium text-gray-900">
                       {patent.grantNumber || patent.applicationNumber}
                     </td>

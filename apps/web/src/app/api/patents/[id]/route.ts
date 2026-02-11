@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { db, schema } from "@/lib/db";
-import { eq, and } from "drizzle-orm";
+import { eq, and, asc } from "drizzle-orm";
 
 export async function GET(
   request: NextRequest,
@@ -21,7 +21,7 @@ export async function GET(
 
   try {
     // Verify patent belongs to user's org via org_assets
-    const orgAsset = await db
+    const orgAssetResult = await db
       .select()
       .from(schema.orgAssets)
       .where(
@@ -32,9 +32,11 @@ export async function GET(
       )
       .limit(1);
 
-    if (orgAsset.length === 0) {
+    if (orgAssetResult.length === 0) {
       return NextResponse.json({ error: "Patent not found" }, { status: 404 });
     }
+
+    const orgAsset = orgAssetResult[0];
 
     // Get patent
     const patents = await db
@@ -48,25 +50,71 @@ export async function GET(
     }
 
     const patent = patents[0];
+    const documentNumber = patent.grantNumber || patent.applicationNumber;
 
-    // Get assignments for this patent
-    const assignments = await db
-      .select()
-      .from(schema.assignments)
-      .where(eq(schema.assignments.patentId, id))
-      .orderBy(schema.assignments.recordDate);
+    // Get assignments for this patent via assignmentDocuments join
+    const assignmentResults = await db
+      .select({
+        assignmentId: schema.assignments.id,
+        rfId: schema.assignments.rfId,
+        conveyanceText: schema.assignments.conveyanceText,
+        recordDate: schema.assignments.recordDate,
+        executionDate: schema.assignments.executionDate,
+      })
+      .from(schema.assignmentDocuments)
+      .innerJoin(
+        schema.assignments,
+        eq(schema.assignmentDocuments.assignmentId, schema.assignments.id)
+      )
+      .where(eq(schema.assignmentDocuments.documentNumber, documentNumber || ""))
+      .orderBy(asc(schema.assignments.recordDate));
 
-    // Get dashboard item for tree_json
+    // Get assignors and assignees for each assignment
+    const assignments = await Promise.all(
+      assignmentResults.map(async (a) => {
+        const [assignors, assignees] = await Promise.all([
+          db
+            .select({ name: schema.assignmentAssignors.name })
+            .from(schema.assignmentAssignors)
+            .where(eq(schema.assignmentAssignors.assignmentId, a.assignmentId)),
+          db
+            .select({ name: schema.assignmentAssignees.name })
+            .from(schema.assignmentAssignees)
+            .where(eq(schema.assignmentAssignees.assignmentId, a.assignmentId)),
+        ]);
+
+        return {
+          id: a.assignmentId,
+          rfId: a.rfId,
+          conveyanceText: a.conveyanceText,
+          recordDate: a.recordDate,
+          executionDate: a.executionDate,
+          assignors: assignors.map((s) => s.name),
+          assignees: assignees.map((s) => s.name),
+        };
+      })
+    );
+
+    // Get dashboard item for tree_json using assetId
     const dashboardItems = await db
       .select()
       .from(schema.dashboardItems)
-      .where(eq(schema.dashboardItems.patentId, id))
+      .where(eq(schema.dashboardItems.assetId, orgAsset.id))
       .limit(1);
 
     const treeJson = dashboardItems[0]?.treeJson ?? null;
 
     return NextResponse.json({
-      patent,
+      patent: {
+        id: patent.id,
+        patentNumber: patent.grantNumber || patent.applicationNumber,
+        title: patent.title,
+        abstract: patent.abstract,
+        filingDate: patent.filingDate,
+        issueDate: patent.grantDate,
+        expirationDate: patent.expirationDate,
+        status: patent.maintenanceFeeStatus,
+      },
       assignments,
       treeJson,
     });
