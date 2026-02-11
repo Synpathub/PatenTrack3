@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { LogoutButton } from "@/components/logout-button";
+import { NavLinks } from "@/components/nav-links";
 
 export default async function DashboardLayout({
   children,
@@ -17,11 +18,14 @@ export default async function DashboardLayout({
     <div className="min-h-screen bg-gray-50" style={{ colorScheme: "light" }}>
       <header className="sticky top-0 z-30 border-b border-gray-200 bg-white">
         <div className="mx-auto flex h-14 max-w-7xl items-center justify-between px-4 sm:px-6">
-          <div className="flex items-center gap-3">
-            <a href="/" className="text-lg font-semibold text-gray-900 hover:text-gray-700 transition-colors">
-              PatenTrack
-            </a>
-            <span className="hidden sm:inline text-xs text-gray-400">Patent Portfolio Oversight</span>
+          <div className="flex items-center gap-6">
+            <div className="flex items-center gap-3">
+              <a href="/" className="text-lg font-semibold text-gray-900 hover:text-gray-700 transition-colors">
+                PatenTrack
+              </a>
+              <span className="hidden sm:inline text-xs text-gray-400">Patent Portfolio Oversight</span>
+            </div>
+            <NavLinks />
           </div>
           <div className="flex items-center gap-4">
             <span className="hidden sm:inline text-sm text-gray-600">{session.user.email}</span>
